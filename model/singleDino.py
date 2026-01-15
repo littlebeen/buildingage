@@ -370,7 +370,7 @@ class DW_bn_relu(nn.Module):
 
 # Dinov3_checkpoint = torch.load("/media/lscsc/nas2/ziyi/TextSeg/PTH/DINOv3_ViT_SAT-493M/dinov3_vitl16_pretrain_sat493m-eadcf0ff.pth")
 Dinov3_checkpoint = torch.load(
-    "/home/ubuntu22-tmp/xianping/wanxin/MFNet/weights/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth")
+    "/mnt/d/Jialu/buildingage/weights/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth")
 
 
 # Dinov3_checkpoint = torch.load("/media/lscsc/nas2/ziyi/TextSeg/PTH/DINOv3_ViT_LVD-1689M/dinov3_vith16plus_pretrain_lvd1689m-7c1da9a5.pth")
@@ -412,7 +412,7 @@ class UNetFormer(nn.Module):
 
         self.image_encoder = DINOv3(
             backbone=torch.hub.load(
-                "/home/ubuntu22-tmp/xianping/wanxin/MFNet/dinov3",
+                "/mnt/d/Jialu/buildingage/dinov3",
                 'dinov3_vitl16',  # hubconf.py 里定义的函数
                 # 'dinov3_vith16plus',  # 1280
                 source='local',
@@ -451,7 +451,7 @@ class UNetFormer(nn.Module):
     def forward(self, x):
         b, _, h, w = x.size()
         deepx = self.image_encoder(x)  # 256*1024
-        deepx = deepx[0].permute(0, 2, 1).view(b, 1024, 16, 16)
+        deepx = deepx[0].permute(0, 2, 1).view(b, 1024, 32, 32)
         ## 这个deepx可由interaction_indexes这个控制，配了一个UNetformer的解码器，自行修改
         deepx = self.neck(deepx)
         res1 = self.fpn1(deepx)
