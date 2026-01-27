@@ -4,61 +4,65 @@ import random
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
+from torch.nn import Parameter as P
 import itertools
 from torchvision.utils import make_grid
 from torch.autograd import Variable
 from PIL import Image
-from skimage import io
 import os
-import glob
+from torch.nn.modules.loss import _Loss, _WeightedLoss
 
 # Parameters
 ## SwinFusion
 # WINDOW_SIZE = (64, 64) # Patch size
-WINDOW_SIZE = (256, 256) # Patch size
+WINDOW_SIZE = (512, 512) # Patch size
 
 STRIDE = 32 # Stride for testing
 IN_CHANNELS = 3 # Number of input channels (e.g. RGB)
 FOLDER = "/mnt/d/Jialu/dataset/" # Replace with your "/path/to/the/ISPRS/dataset/folder/"
 BATCH_SIZE = 10 # Number of samples in a mini-batch
 
-LABELS = ["<=1960", "1960<x<=1970", "1970<x<=1980", "1980<x<=1990", "1990<x<=2000", "2000<x<=2010", "2010<x<=2020"] # Label names
+#LABELS = ["<=1960", "1960<x<=1970", "1970<x<=1980", "1980<x<=1990", "1990<x<=2000", "2000<x<=2010", "2010<x<=2020"] # Label names
+LABELS = ["<=1970", "1970<x<=1980", "1980<x<=1990","1990<x<=2000", "2000<x<=2010", "2000<x<=2020"] # Label names
+#LABELS = ["x<1980", "1980<=x<=2000", "2000<x"] # Label names
 N_CLASSES = len(LABELS) # Number of classes
 WEIGHTS = torch.ones(N_CLASSES) # Weights for class balancing
 CACHE = True # Store the dataset in-memory
 
 # ISPRS color palette
 # Let's define the standard ISPRS color palette
-palette = {0 : (255, 255, 255), # Undefined (white)
-           1 : (0, 0, 255),     # <=1960
-           2 : (0, 255, 255),   # 1960<x<=1970
-           3 : (0, 255, 0),     # 1970<x<=1980
-           4 : (255, 255, 0),   # 1980<x<=1990
-           5 : (255, 0, 0),     # 1990<x<=2000
-           6 : (255, 0, 255),   # 2000<x<=2010
-           7 : (0, 0, 0)}       # 2010<x<=2020 black
+palette = {-1 : (255, 255, 255), # Undefined (white)
+           0 : (0, 0, 255),     # <=1960
+           1 : (0, 255, 255),   # 1960<x<=1970
+           2 : (0, 255, 0),     # 1970<x<=1980
+           3 : (255, 255, 0),   # 1980<x<=1990
+           4 : (255, 0, 0),     # 1990<x<=2000
+           5 : (255, 0, 255),   # 2000<x<=2010
+           6 : (0, 0, 0)}       # 2010<x<=2020 black
 
 invert_palette = {v: k for k, v in palette.items()}
 
 MODE = 'train'
 # MODE = 'Test'
 
-# LOSS = 'SEG'
+LOSS = 'ORD'
 # LOSS = 'SEG+BDY'
 # LOSS = 'SEG+OBJ'
-LOSS = 'SEG+BDY+OBJ'
+# LOSS = 'SEG+BDY+OBJ'
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
-def convert_to_color(arr_2d, palette=palette):
+def convert_to_color(arr_2d2, main_dir,name, palette=palette):
     """ Numeric labels to RGB-color encoding """
-    arr_3d = np.zeros((arr_2d.shape[0], arr_2d.shape[1], 3), dtype=np.uint8)
+    arr_2d = arr_2d2.cpu().numpy()
+    arr_3d = np.zeros((arr_2d2.shape[0], arr_2d2.shape[1], 3), dtype=np.uint8)
 
     for c, i in palette.items():
         m = arr_2d == c
         arr_3d[m] = i
+    color_img = Image.fromarray(arr_3d)  # 彩色图直接转换
 
-    return arr_3d
+    color_img.save(os.path.join(main_dir, name + ".jpg"))  # 保存彩色图
 
 def convert_from_color(arr_3d, palette=invert_palette):
     """ RGB-color encoding to grayscale labels """
@@ -71,7 +75,7 @@ def convert_from_color(arr_3d, palette=invert_palette):
     return arr_2d
 
 def save_img(tensor, name):
-    tensor = tensor.cpu() .permute((1, 0, 2, 3))
+    tensor = tensor.cpu().permute((1, 0, 2, 3))
     im = make_grid(tensor, normalize=True, scale_each=True, nrow=8, padding=2).permute((1, 2, 0))
     im = (im.data.numpy() * 255.).astype(np.uint8)
     Image.fromarray(im).save(name + '.jpg')
@@ -84,129 +88,8 @@ def object_process(object):
         new_id += 1
     return object
 
-class ISPRS_dataset(torch.utils.data.Dataset):
-    def __init__(self, mode,cache=False, augmentation=True):
-        super(ISPRS_dataset, self).__init__()
-        MAIN_FOLDER = FOLDER + 'hk_building_age/'+mode+'/'
-        DATA_FOLDER = MAIN_FOLDER + 'image/tdop*.tif'
-        LABEL_FOLDER = MAIN_FOLDER + 'class/tdop*.png'
-        BOUNDARY_FOLDER = MAIN_FOLDER + 'mask/tdop*.png'
-        HEIGHT_FOLDER = MAIN_FOLDER + 'height/tdop*.png'
-
-        self.augmentation = augmentation
-        self.cache = cache
-
-        # List of files
-        self.data_files = glob.glob(DATA_FOLDER)
-        self.boundary_files = glob.glob(BOUNDARY_FOLDER)
-        self.height_files = glob.glob(HEIGHT_FOLDER)
-        self.label_files = glob.glob(LABEL_FOLDER)
-
-        # Sanity check : raise an error if some files do not exist
-        for f in self.data_files + self.label_files:
-            if not os.path.isfile(f):
-                raise KeyError('{} is not a file !'.format(f))
-
-
-    def __len__(self):
-        # Default epoch size is 10 000 samples
-        return len(self.label_files)
-
-    @classmethod
-    def data_augmentation(cls, *arrays, flip=True, mirror=True):
-        will_flip, will_mirror = False, False
-        if flip and random.random() < 0.5:
-            will_flip = True
-        if mirror and random.random() < 0.5:
-            will_mirror = True
-
-        results = []
-        for array in arrays:
-            if will_flip:
-                if len(array.shape) == 2:
-                    array = array[::-1, :]
-                else:
-                    array = array[:, ::-1, :]
-            if will_mirror:
-                if len(array.shape) == 2:
-                    array = array[:, ::-1]
-                else:
-                    array = array[:, :, ::-1]
-            results.append(np.copy(array))
-
-        return tuple(results)
-
-    def __getitem__(self, i):
-        data = io.imread(self.data_files[i])[:, :, :3].transpose((2, 0, 1))
-        data = 1 / 255 * np.asarray(data, dtype='float32')
-
-        height = io.imread(self.height_files[i])
-        height = np.asarray(height, dtype='float32')
-
-        boundary = np.asarray(io.imread(self.boundary_files[i])) / 255
-        boundary = boundary.astype(np.int64)
-
-        label = np.asarray(io.imread(self.label_files[i]))
-        label = label.astype(np.int64)
-
-        # if DATASET == 'Potsdam':
-        #     ## RGB
-        #     data = io.imread(self.data_files[random_idx])[:, :, :3].transpose((2, 0, 1))
-        #     ## IRRG
-        #     # data = io.imread(self.data_files[random_idx])[:, :, (3, 0, 1, 2)][:, :, :3].transpose((2, 0, 1))
-        #     data = 1 / 255 * np.asarray(data, dtype='float32')
-        # else:
-        # ## Vaihingen IRRG
-        #     data = io.imread(self.data_files[random_idx])
-        #     data = 1 / 255 * np.asarray(data.transpose((2, 0, 1)), dtype='float32')
-        # if self.cache:
-        #     self.data_cache_[random_idx] = data
-            
-        # if random_idx in self.boundary_cache_.keys():
-        #     boundary = self.boundary_cache_[random_idx]
-        # else:
-        #     boundary = np.asarray(io.imread(self.boundary_files[random_idx])) / 255
-        #     boundary = boundary.astype(np.int64)
-        #     if self.cache:
-        #         self.boundary_cache_[random_idx] = boundary
-
-        # if random_idx in self.object_cache_.keys():
-        #     object = self.object_cache_[random_idx]
-        # else:
-        #     object = np.asarray(io.imread(self.object_files[random_idx]))
-            
-        #     if self.cache:
-        #         self.object_cache_[random_idx] = object
-
-        # if random_idx in self.label_cache_.keys():
-        #     label = self.label_cache_[random_idx]
-        # else:
-        #     # Labels are converted from RGB to their numeric values
-        #     if DATASET == 'Urban':
-        #         label = np.asarray(io.imread(self.label_files[random_idx]), dtype='int64') - 1
-        #     else:
-        #         label = np.asarray(convert_from_color(io.imread(self.label_files[random_idx])), dtype='int64')
-        #     if self.cache:
-        #         self.label_cache_[random_idx] = label
-
-        # Get a random patch
-        x1, x2, y1, y2 = get_random_pos(data, WINDOW_SIZE)
-        data_p = data[:, x1:x2, y1:y2]
-        boundary_p = boundary[x1:x2, y1:y2]
-        height_p = height[x1:x2, y1:y2]
-        label_p = label[x1:x2, y1:y2]
-
-        # Data augmentation
-        # data_p, boundary_p, label_p = self.data_augmentation(data_p, boundary_p, label_p)
-        data_p, boundary_p, height_p, label_p = self.data_augmentation(data_p, boundary_p, height_p, label_p)
-
-        # Return the torch.Tensor values
-        return (torch.from_numpy(data_p),
-                torch.from_numpy(boundary_p),
-                torch.from_numpy(height_p),
-                torch.from_numpy(label_p))
         
-## We load one tile from the dataset and we display it
+# We load one tile from the dataset and we display it
 # img = io.imread('./ISPRS_dataset/Vaihingen/top/top_mosaic_09cm_area11.tif')
 # fig = plt.figure()
 # fig.add_subplot(121)
@@ -293,6 +176,9 @@ def CrossEntropy2d(input, target, weight=None, size_average=True):
 
 
 def accuracy(input, target):
+    valid_mask = target != -1   
+    target = target[valid_mask]
+    input = input[valid_mask]
     return 100 * float(np.count_nonzero(input == target)) / target.size
 
 
@@ -410,8 +296,119 @@ class BoundaryLoss(nn.Module):
         loss = torch.mean(1 - BF1)
 
         return loss
-    
+
+
+class WeightedOrdinalLoss(nn.Module):
+    """
+    加权有序损失（Ordinal Loss），适配建筑年龄有序分类任务
+    支持：1. 经典Ordinal Loss核心逻辑 2. 线性/指数权重，强化近期建筑预测 3. 忽略背景像素
+    """
+    def __init__(self, num_classes=7, weight_type="linear", lambda_weight=0.1, background_label=-1):
+        """
+        初始化参数
+        Args:
+            num_classes: 建筑年龄类别总数（如8类：1950-1960至2020-2026）
+            weight_type: 权重类型，"linear"（线性权重）或"exp"（指数权重）
+            lambda_weight: 权重超参数，控制近期建筑权重强度
+            background_label: 背景像素标签（不参与损失计算），默认0
+        """
+        super(WeightedOrdinalLoss, self).__init__()
+        self.num_classes = num_classes  # 类别总数C
+        self.weight_type = weight_type
+        self.lambda_weight = lambda_weight
+        self.background_label = background_label
+
+    def _get_sample_weight(self, target):
+        """
+        计算每个像素的样本权重（近期建筑权重更高）
+        Args:
+            target: 真实标签张量，shape [B, H, W]（批次、高度、宽度）
+        Returns:
+            weight: 与target同shape的权重张量
+        """
+        # 1. 筛选建筑像素（排除背景），背景权重设为0
+        valid_mask = (target != self.background_label).float()
+        # 2. 提取建筑像素的类别序号（c_i：0~num_classes-1，近期建筑类别序号更大）
+        class_indices = (target.float()) * valid_mask
+
+        # 3. 计算权重（保证权重为正，且近期类别权重更高）
+        if self.weight_type == "linear":
+            # 线性权重：w_i = 1 + lambda_weight * c_i（近期类别序号大，权重线性增加）
+            weight = 1.0 + self.lambda_weight * class_indices
+        elif self.weight_type == "exp":
+            # 指数权重：w_i = exp(lambda_weight * c_i)（近期类别权重指数级增加）
+            weight = torch.exp(self.lambda_weight * class_indices)
+        else:
+            raise ValueError("weight_type仅支持 'linear' 或 'exp'")
+
+        # 4. 背景像素权重置0（不参与损失计算）
+        weight = weight * valid_mask
+        return weight
+
+    def _ordinal_label_conversion(self, target):
+        """
+        有序标签转换：将单标签 [B, H, W] 转为二元有序标签 [B, C-1, H, W]
+        核心逻辑：若真实类别为c，那么对于k=0~C-2，k < c 时标签为1，k >= c 时标签为0
+        Args:
+            target: 真实标签张量，shape [B, H, W]
+        Returns:
+            ordinal_target: 二元有序标签，shape [B, num_classes-1, H, W]
+        """
+        B, H, W = target.shape
+        C = self.num_classes
+
+        # 1. 扩展维度，便于广播计算 [B, H, W] -> [B, 1, H, W]
+        target_expanded = target.unsqueeze(1)
+        # 2. 生成k值序列（0~C-2），shape [1, C-1, 1, 1]
+        k_sequence = torch.arange(0, C-1, device=target.device).unsqueeze(0).unsqueeze(2).unsqueeze(3)
+        # 3. 广播比较：k < c 时为1，否则为0（得到二元有序标签）
+        ordinal_target = (k_sequence < target_expanded).float()
+
+        # 4. 背景像素对应的有序标签置0（不参与损失计算）
+        valid_mask = (target != self.background_label).unsqueeze(1).float()
+        ordinal_target = ordinal_target * valid_mask
+
+        return ordinal_target
+
+    def forward(self, input, target):
+        """
+        前向传播：计算加权Ordinal Loss
+        Args:
+            input: 模型预测输出，shape [B, num_classes, H, W]（无需softmax，内部用sigmoid）
+            target: 真实标签，shape [B, H, W]（每个像素值为0~num_classes-1，背景为background_label）
+        Returns:
+            loss: 加权有序损失值（标量）
+        """
+        B, C, H, W = input.shape
+        assert C == self.num_classes, f"模型输出通道数{C}需与类别数{self.num_classes}一致"
+        assert target.shape == (B, H, W), f"目标标签shape {target.shape}需与[B, H, W]一致"
+
+        # 步骤1：标签转换：单标签 -> 二元有序标签 [B, C-1, H, W]
+        ordinal_target = self._ordinal_label_conversion(target)
+
+        # 步骤2：模型输出处理：取前C-1个通道（对应k=0~C-2的二元判断），并通过sigmoid激活
+        # 原因：Ordinal Loss将多分类转为C-1个二元分类，每个分类判断"是否大于类别k"
+        input_ordinal = input[:, :-1, :, :]  # 取前C-1个通道，shape [B, C-1, H, W]
+        input_sigmoid = torch.sigmoid(input_ordinal)  # 转为0~1的概率值
+
+        # 步骤3：计算每个像素的权重（近期建筑权重更高）
+        sample_weight = self._get_sample_weight(target)  # [B, H, W]
+        # 扩展权重维度，适配有序损失计算 [B, H, W] -> [B, 1, H, W]
+        weight_expanded = sample_weight.unsqueeze(1)
+
+        # 步骤4：计算二元交叉熵（BCE）损失（带权重）
+        # BCE公式：-w * [y*log(p) + (1-y)*log(1-p)]
+        bce_loss = F.binary_cross_entropy(input_sigmoid, ordinal_target, weight=weight_expanded, reduction='none')
+
+        # 步骤5：平均化损失（仅对有效建筑像素计算）
+        valid_pixel_num = torch.clamp(sample_weight.sum(), min=1.0)  # 避免除以0
+        loss = (bce_loss.sum()) / valid_pixel_num
+
+        return loss
+
+
 def metrics(predictions, gts, label_values=LABELS):
+
     cm = confusion_matrix(
         gts,
         predictions,
@@ -457,6 +454,12 @@ def metrics(predictions, gts, label_values=LABELS):
     print(MIoU)
     MIoU = np.nanmean(MIoU[:5])
     print('mean MIoU: %.4f' % (MIoU))
+
+    diff  = gts-predictions
+    diff_squared = np.square(diff)
+    mse = np.mean(diff_squared)
+    rmse = np.sqrt(mse)
+    print("RMSE : %.4f" % (rmse))
     print("---")
 
     return MIoU
