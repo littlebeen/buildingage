@@ -420,6 +420,16 @@ class UNetFormer(nn.Module):
             ),
             interaction_indexes=[23]
         )
+        mask_in_chans=16
+        self.mask_encoder = nn.Sequential(
+            nn.Conv2d(1, mask_in_chans // 4, kernel_size=2, stride=2),
+            LayerNorm2d(mask_in_chans // 4),
+            nn.GELU(),
+            nn.Conv2d(mask_in_chans // 4, mask_in_chans, kernel_size=2, stride=2),
+            LayerNorm2d(mask_in_chans),
+            nn.GELU(),
+            nn.Conv2d(mask_in_chans, 256, kernel_size=1),
+        )
 
         encoder_channels = (256, 256, 256, 256)
 
@@ -448,13 +458,18 @@ class UNetFormer(nn.Module):
 
         self.decoder = Decoder(encoder_channels, decode_channels, dropout, window_size, num_classes)
 
-    def forward(self, x):
+    def forward(self, x, depth, mask,ufzs):
+        mask_inf=self.mask_encoder(mask)
         b, _, h, w = x.size()
         deepx = self.image_encoder(x)  # 256*1024
+        #deepx2 = self.image_encoder(depth)  # 256*1024
+        #deepx2 = deepx2[0].permute(0, 2, 1).view(b, 1024, 32, 32)
         deepx = deepx[0].permute(0, 2, 1).view(b, 1024, 32, 32)
         ## 这个deepx可由interaction_indexes这个控制，配了一个UNetformer的解码器，自行修改
+        #deepx = torch.cat([deepx,mask_inf],dim=1)
         deepx = self.neck(deepx)
         res1 = self.fpn1(deepx)
+        res1 = mask_inf+res1
         res2 = self.fpn2(deepx)
         res3 = self.fpn3(deepx)
         res4 = self.fpn4(deepx)
