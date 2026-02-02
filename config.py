@@ -45,11 +45,11 @@ invert_palette = {v: k for k, v in palette.items()}
 MODE = 'train'
 # MODE = 'Test'
 
-LOSS = 'ORD'
+LOSS = 'SEG'  #ORD
 # LOSS = 'SEG+BDY'
 # LOSS = 'SEG+OBJ'
 # LOSS = 'SEG+BDY+OBJ'
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 
 def convert_to_color(arr_2d2, main_dir,name, palette=palette):
@@ -74,11 +74,13 @@ def convert_from_color(arr_3d, palette=invert_palette):
 
     return arr_2d
 
-def save_img(tensor, name):
-    tensor = tensor.cpu().permute((1, 0, 2, 3))
-    im = make_grid(tensor, normalize=True, scale_each=True, nrow=8, padding=2).permute((1, 2, 0))
-    im = (im.data.numpy() * 255.).astype(np.uint8)
-    Image.fromarray(im).save(name + '.jpg')
+def save_img(tensor, main_dir, name):
+    name = os.path.join(main_dir, name + ".jpg")
+    tensor = tensor.cpu().permute((1,2,0))
+    # im = make_grid(tensor, normalize=True, scale_each=True, nrow=8, padding=2).permute((1, 2, 0))
+    im = (tensor.data.numpy() * 255.).astype(np.uint8)
+    im = Image.fromarray(im).save(name + '.jpg')
+
 
 def object_process(object):
     ids = np.unique(object)
@@ -120,7 +122,7 @@ def get_random_pos(img, window_shape):
 
 class CrossEntropy2d_ignore(nn.Module):
 
-    def __init__(self, size_average=True, ignore_label=255):
+    def __init__(self, size_average=True, ignore_label=-1):
         super(CrossEntropy2d_ignore, self).__init__()
         self.size_average = size_average
         self.ignore_label = ignore_label
@@ -146,7 +148,7 @@ class CrossEntropy2d_ignore(nn.Module):
             return Variable(torch.zeros(1))
         predict = predict.transpose(1, 2).transpose(2, 3).contiguous()
         predict = predict[target_mask.view(n, h, w, 1).repeat(1, 1, 1, c)].view(-1, c)
-        loss = F.cross_entropy(predict, target, weight=weight, size_average=self.size_average)
+        loss = F.cross_entropy(predict, target, weight=weight,reduction='mean')
         return loss
     
 def loss_calc(pred, label, weights):
@@ -164,13 +166,13 @@ def CrossEntropy2d(input, target, weight=None, size_average=True):
     """ 2D version of the cross entropy loss """
     dim = input.dim()
     if dim == 2:
-        return F.cross_entropy(input, target, weight, size_average)
+        return F.cross_entropy(input, target, weight,reduction='mean')
     elif dim == 4:
         output = input.view(input.size(0), input.size(1), -1)
         output = torch.transpose(output, 1, 2).contiguous()
         output = output.view(-1, output.size(2))
         target = target.view(-1)
-        return F.cross_entropy(output, target, weight, size_average)
+        return F.cross_entropy(output, target, weight,reduction='mean')
     else:
         raise ValueError('Expected 2 or 4 dimensions (got {})'.format(dim))
 

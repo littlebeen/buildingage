@@ -1,35 +1,29 @@
 import numpy as np
-from glob import glob
-from tqdm import tqdm_notebook as tqdm
-from sklearn.metrics import confusion_matrix
-import random, time
-import itertools
-import matplotlib.pyplot as plt
 import torch
+
 torch.cuda.device_count()
-import torch.nn.functional as F
-import torch.utils.data as data
 import torch.optim as optim
-import torch.optim.lr_scheduler
-import torch.nn.init
 from torch.autograd import Variable
 from IPython.display import clear_output
-from model.singleDino import UNetFormer as singleDino
-from config import *
+from config import convert_to_color, save_img,metrics,WeightedOrdinalLoss,accuracy,loss_calc,N_CLASSES,WINDOW_SIZE,BATCH_SIZE,MODE,LOSS,WEIGHTS
 from dataset import get_dataloader
+import os
 
-
-DATASET = 'hongkong' #amsterdam hongkong
-MODEL = 'Dino'
+DATASET = 'amsterdam' #amsterdam hongkong
+MODEL = 'Dino' #Dino FTransUNet
 print(MODEL + ', ' + MODE + ', ' + DATASET + ', ' + LOSS)
-main_dir = './result/{}_{}'.format(MODEL, DATASET)
+main_dir = './result/{}_{}gt'.format(MODEL, DATASET)
 
 if not os.path.exists(main_dir):
     # os.makedirs()：创建文件夹，支持创建多级嵌套目录（如 "a/b/c/d"）
     os.makedirs(main_dir)
 
 if MODEL == 'Dino':
+    from model.singleDino.singleDino_simgle import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
+if MODEL == 'FTransUNet':
+    from model.ftransunet.FUNet import VisionTransformer
+    net = VisionTransformer(img_size=WINDOW_SIZE[0], num_classes=N_CLASSES).cuda()
 
 params = 0
 for name, param in net.named_parameters():
@@ -40,6 +34,8 @@ print(params)
 train_set = get_dataloader(DATASET, 'train')
 train_loader = torch.utils.data.DataLoader(train_set,batch_size=BATCH_SIZE)
 
+test_set = get_dataloader(DATASET, 'test')
+test_loader = torch.utils.data.DataLoader(test_set,batch_size=BATCH_SIZE)
 
 val_set = get_dataloader(DATASET, 'val')
 val_loader = torch.utils.data.DataLoader(val_set,batch_size=BATCH_SIZE)
@@ -65,16 +61,20 @@ optimizer = optim.SGD(net.parameters(), lr=base_lr, momentum=0.9, weight_decay=0
 # We define the scheduler
 scheduler = optim.lr_scheduler.MultiStepLR(optimizer, [25, 35, 45], gamma=0.1)
 
+# def get_result(output,threshold=0.5):
+#     input_ordinal = output[:, :-1, :, :]  # 取前C-1个通道，shape [1, C-1, H, W]
+#     sigmoid_probs = torch.sigmoid(input_ordinal)  # 激活为0~1的概率值
+    
+#     # 3. 二值化：基于阈值得到二元判断结果（0/1）
+#     binary_predictions = (sigmoid_probs >= threshold).float()  # shape [1, C-1, H, W]
+    
+#     # 4. 逐像素求和，得到建筑年龄类别序号（核心步骤）
+#     #    dim=1：对C-1个二元判断结果求和，shape [1, H, W] -> [H, W]
+#     class_indices = torch.sum(binary_predictions, dim=1).squeeze(0).long()  # 移除批次维度
+#     return class_indices
+
 def get_result(output,threshold=0.5):
-    input_ordinal = output[:, :-1, :, :]  # 取前C-1个通道，shape [1, C-1, H, W]
-    sigmoid_probs = torch.sigmoid(input_ordinal)  # 激活为0~1的概率值
-    
-    # 3. 二值化：基于阈值得到二元判断结果（0/1）
-    binary_predictions = (sigmoid_probs >= threshold).float()  # shape [1, C-1, H, W]
-    
-    # 4. 逐像素求和，得到建筑年龄类别序号（核心步骤）
-    #    dim=1：对C-1个二元判断结果求和，shape [1, H, W] -> [H, W]
-    class_indices = torch.sum(binary_predictions, dim=1).squeeze(0).long()  # 移除批次维度
+    class_indices = torch.argmax(output, dim=1)
     return class_indices
 
 def test(net):
@@ -83,10 +83,10 @@ def test(net):
     all_gts = []
     # Switch the network to inference mode
     with torch.no_grad():
-        for batch_idx, (data, boundary, object, target) in enumerate(val_loader):
-            data, target = Variable(data.cuda()), Variable(target.cuda())
+        for batch_idx, (data, mask, height,ufzs, target) in enumerate(val_loader):
+            data, mask,height,ufzs, target = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda())
             optimizer.zero_grad()
-            output = net(data)
+            output = net(data, height, mask, ufzs)
             outs = output.data.cpu().numpy()
             class_indices = get_result(output)
             if batch_idx==0:
@@ -94,6 +94,8 @@ def test(net):
                     class_indices[target == -1]=-1
                     convert_to_color(class_indices[item], main_dir, name = "pred_{}".format(item))
                     convert_to_color(target[item], main_dir, name = "gt_{}".format(item))
+                    # save_img(data[item], main_dir, name = "img_{}".format(item))
+                    # save_img(height[item], main_dir, name = "height_{}".format(item))
             valid_mask = target != -1   
             target = target[valid_mask]
             class_indices = class_indices[valid_mask]
@@ -111,25 +113,19 @@ def train(net, optimizer, epochs, scheduler=None, weights=WEIGHTS, save_epoch=3)
 
     iter_ = 0
     MIoU_best = 0.30
-    criterionb = BoundaryLoss()
-    criteriono = ObjectLoss()
     criterionor = WeightedOrdinalLoss(num_classes = N_CLASSES)
     for e in range(1, epochs + 1):
         if scheduler is not None:
             scheduler.step()
         net.train()
-        for batch_idx, (data, boundary, object, target) in enumerate(train_loader):
-            continue
-            data, target = Variable(data.cuda()), Variable(target.cuda())
+        for batch_idx, (data, mask, height,ufzs, target) in enumerate(train_loader):
+            data, mask,height,ufzs, target = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda())
             optimizer.zero_grad()
-            output = net(data)
-            # loss_ce = loss_calc(output, target, weights)
-            # loss_boundary = criterionb(output, boundary)
-            # loss_object = criteriono(output, object)
-            loss_ordinal = criterionor(output, target)
-   
-            # if LOSS == 'SEG':
-            #     loss = loss_ce
+            output = net(data, height, mask, ufzs)
+            
+            if LOSS == 'SEG':
+                loss_ce = loss_calc(output, target, weights)
+                loss = loss_ce
             # elif LOSS == 'SEG+BDY':
             #     loss = loss_ce + loss_boundary * LBABDA_BDY
             # elif LOSS == 'SEG+OBJ':
@@ -137,14 +133,13 @@ def train(net, optimizer, epochs, scheduler=None, weights=WEIGHTS, save_epoch=3)
             # elif LOSS == 'SEG+BDY+OBJ':
             #     loss = loss_ce + loss_boundary * LBABDA_BDY + loss_object * LBABDA_OBJ
             if LOSS == 'ORD':
+                loss_ordinal = criterionor(output, target)
                 loss = loss_ordinal
             loss.backward()
             optimizer.step()
 
             losses[iter_] = loss.data
             mean_losses[iter_] = np.mean(losses[max(0, iter_ - 100):iter_])
-
-
 
             if iter_ % 50 == 0:
                 clear_output()
@@ -164,7 +159,7 @@ def train(net, optimizer, epochs, scheduler=None, weights=WEIGHTS, save_epoch=3)
             MIoU = test(net)
             net.train()
             if MIoU > MIoU_best:
-                torch.save(net.state_dict(), main_dir + '/{}_epoch{}_{}'.format(MODEL, e, MIoU))
+                torch.save(net.state_dict(), main_dir + '/{}_epoch{}_{}.pth'.format(MODEL, e, MIoU))
                 MIoU_best = MIoU
 
 if MODE == 'train':
