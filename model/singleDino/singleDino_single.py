@@ -420,16 +420,6 @@ class UNetFormer(nn.Module):
             ),
             interaction_indexes=[23]
         )
-        mask_in_chans=16
-        self.mask_encoder = nn.Sequential(
-            nn.Conv2d(1, mask_in_chans // 4, kernel_size=2, stride=2),
-            LayerNorm2d(mask_in_chans // 4),
-            nn.GELU(),
-            nn.Conv2d(mask_in_chans // 4, mask_in_chans, kernel_size=2, stride=2),
-            LayerNorm2d(mask_in_chans),
-            nn.GELU(),
-            nn.Conv2d(mask_in_chans, 256, kernel_size=1),
-        )
 
         encoder_channels = (256, 256, 256, 256)
 

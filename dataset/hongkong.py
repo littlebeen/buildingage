@@ -5,6 +5,50 @@ import os
 import numpy as np
 from skimage import io
 
+def generate_first_impervious_year(imperv_data):
+    # 步骤1：数据维度校验与标准化（确保输入为4×W×H，类型为np.ndarray）
+    n_times, H, W = imperv_data.shape
+    assert n_times == 4, "输入数据应包含4个时相的impervious信息"
+    imperv = imperv_data.copy() 
+
+    # 步骤2：定义4个时相对应的年份（严格按1990/2000/2010/2020顺序）
+    year_mapping = np.array([3, 4, 5, 6])
+    first_imperv_map = np.full(shape=(1, H, W), fill_value=-1, dtype=np.int32)
+
+    # 步骤3：创建有效像素掩码（排除缺测值0，仅保留1/2的有效像素）
+    valid_mask = (imperv != 0)
+    valid_pixel = valid_mask.all(axis=0)  # 形状(H, W)，True=该像素4个时相均无缺测
+
+    imperv_mask = (imperv == 2)  # 形状(4, H, W)，True=不透水面
+    first_imperv_idx = np.argmax(imperv_mask, axis=0)  # 形状(H, W)，值为0/1/2/3（对应4个时相）
+    # 修正：无不透水面的有效像素，首次索引设为-1
+    no_imperv = ~imperv_mask.any(axis=0)  # 形状(H, W)，True=全程无不透水面
+    first_imperv_idx[no_imperv] = -1
+
+    # 步骤5：验证首次不透化后是否永久保持（排除1→2→1的多次突变）
+    permanent_imperv = np.zeros(shape=(H, W), dtype=bool)  # 形状(H, W)，True=永久不透化
+    for i in range(H):
+        for j in range(W):
+            idx = first_imperv_idx[i, j]
+            if idx == -1:
+                continue  # 全程无不透水面，跳过
+            if valid_pixel[i, j]:
+                # 检查首次不透化后所有时相是否均为不透水面（2）
+                if imperv_mask[idx:, i, j].all():
+                    permanent_imperv[i, j] = True
+
+    ## 情况2：首次永久不透化的像素 → 赋值对应年份（1990/2000/2010/2020）
+    for idx in range(4):
+        # 找到该时相首次永久不透化的像素
+        target_pixel = (first_imperv_idx == idx) & permanent_imperv & valid_pixel
+        first_imperv_map[0, target_pixel] = year_mapping[idx]
+
+    ## 情况3：有效像素中全程透水（无不透水面）或多次突变（非永久不透化）→ 0（无建筑背景）
+    background_pixel = (no_imperv | ~permanent_imperv) & valid_pixel  # 形状(H, W)
+    first_imperv_map[0, background_pixel] = -1
+    return first_imperv_map
+
+
 def get_year_type(arr_processed):
     # arr_processed[(arr_processed >8) & (arr_processed <25)] = 1
     # arr_processed[(arr_processed >35) & (arr_processed <55)] = 2
@@ -113,7 +157,9 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         boundary = boundary[np.newaxis, :, :]
         # height = np.repeat(height, repeats=3, axis=0)
         ufzs = np.stack(ufzs, axis=0)
-        # Return the torch.Tensor values
+        ufzs = generate_first_impervious_year(ufzs)
+        # unique_values1 = np.unique(ufzs)
+        # print(unique_values1)
         return (torch.from_numpy(data),
                 torch.from_numpy(boundary),
                 torch.from_numpy(height),
