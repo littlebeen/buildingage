@@ -12,6 +12,10 @@ from PIL import Image
 import os
 from torch.nn.modules.loss import _Loss, _WeightedLoss
 
+
+DATASET = 'hongkong' #amsterdam hongkong
+MODEL = 'Dino' #Dino FTransUNet
+
 # Parameters
 ## SwinFusion
 # WINDOW_SIZE = (64, 64) # Patch size
@@ -23,8 +27,10 @@ FOLDER = "/mnt/d/Jialu/dataset/" # Replace with your "/path/to/the/ISPRS/dataset
 BATCH_SIZE = 10 # Number of samples in a mini-batch
 
 #LABELS = ["<=1960", "1960<x<=1970", "1970<x<=1980", "1980<x<=1990", "1990<x<=2000", "2000<x<=2010", "2010<x<=2020"] # Label names
-LABELS = ["<=1970", "1970<x<=1980", "1980<x<=1990","1990<x<=2000", "2000<x<=2010", "2000<x<=2020"] # Label names
-#LABELS = ["x<1980", "1980<=x<=2000", "2000<x"] # Label names
+if DATASET=='amsterdam':
+    LABELS = ["x<1980", "1980<=x<=2000", "2000<x"] # Label names
+if DATASET=='hongkong':
+    LABELS = ["<=1970", "1970<x<=1980", "1980<x<=1990","1990<x<=2000", "2000<x<=2010", "2000<x<=2020"] # Label names
 N_CLASSES = len(LABELS) # Number of classes
 WEIGHTS = torch.ones(N_CLASSES) # Weights for class balancing
 CACHE = True # Store the dataset in-memory
@@ -43,19 +49,18 @@ palette = {-1 : (255, 255, 255), # Undefined (white)
 invert_palette = {v: k for k, v in palette.items()}
 
 MODE = 'train'
-# MODE = 'Test'
 
 LOSS = 'SEG'  #ORD
 # LOSS = 'SEG+BDY'
 # LOSS = 'SEG+OBJ'
 # LOSS = 'SEG+BDY+OBJ'
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 
-def convert_to_color(arr_2d2, main_dir,name, palette=palette):
+def convert_to_color(arr_2d, main_dir,name, palette=palette):
     """ Numeric labels to RGB-color encoding """
-    arr_2d = arr_2d2.cpu().numpy()
-    arr_3d = np.zeros((arr_2d2.shape[0], arr_2d2.shape[1], 3), dtype=np.uint8)
+    if isinstance(arr_2d, torch.Tensor):
+        arr_2d = arr_2d.cpu().numpy()
+    arr_3d = np.zeros((arr_2d.shape[0], arr_2d.shape[1], 3), dtype=np.uint8)
 
     for c, i in palette.items():
         m = arr_2d == c
@@ -76,10 +81,12 @@ def convert_from_color(arr_3d, palette=invert_palette):
 
 def save_img(tensor, main_dir, name):
     name = os.path.join(main_dir, name + ".jpg")
+    if tensor.shape[0]==1:
+        tensor = tensor.repeat(3, 1, 1)
     tensor = tensor.cpu().permute((1,2,0))
     # im = make_grid(tensor, normalize=True, scale_each=True, nrow=8, padding=2).permute((1, 2, 0))
     im = (tensor.data.numpy() * 255.).astype(np.uint8)
-    im = Image.fromarray(im).save(name + '.jpg')
+    im = Image.fromarray(im).save(name)
 
 
 def object_process(object):
@@ -151,6 +158,52 @@ class CrossEntropy2d_ignore(nn.Module):
         loss = F.cross_entropy(predict, target, weight=weight,reduction='mean')
         return loss
     
+
+def manual_cross_entropy_with_soft_label(input: torch.Tensor, soft_label: torch.Tensor, dim: int = 1):
+    """
+    手动实现交叉熵损失（适配高斯模糊后的软标签）
+    :param input: 模型输出（未经过softmax），形状(N,C)（分类）或(N,C,H,W)（分割）
+    :param soft_label: 高斯模糊后的软标签，形状(N,C)（分类）或(N,C,H,W)（分割）
+    :param dim: 类别维度（分类/分割均为1）
+    :return: 标量损失值
+    """
+    # 1. 模型输出做log_softmax（数值稳定，避免log(0)）
+    log_pred = F.log_softmax(input, dim=dim)
+    
+    # 2. 计算负对数似然：-∑(soft_label * log_pred) / 样本数
+    # 逐元素相乘后求和，再除以总样本数（分类：N；分割：N*H*W）
+    if len(input.shape) == 2:  # 分类任务：(N,C)
+        num_samples = input.shape[0]
+        loss = -torch.sum(soft_label * log_pred) / num_samples
+    else:  # 分割任务：(N,C,H,W)
+        num_samples = input.shape[0] * input.shape[1] * input.shape[2]
+        loss = -torch.sum(soft_label * log_pred) / num_samples
+    
+    return loss
+
+def pdf_fn(x):
+  x_pdf = torch.exp( -(x)**2 /2  ) * 1/( torch.pi * torch.sqrt(torch.tensor(2)) )
+  return x_pdf
+
+def fast_label_to_dist(one_hot_label):
+    """
+    向量化生成label_dist，无任何for循环
+    :param one_hot_label: 输入one-hot标签，形状(N, C)，N为样本数，C为类别数
+    :return: label_dist，形状(N, C)，和原代码逻辑完全一致
+    """
+    # 步骤1：批量获取所有样本的目标索引t（替代torch.where+循环），形状(N,)
+    target_idx = torch.argmax(one_hot_label, dim=1)  # one-hot找1的索引，比where快10倍+
+    
+    # 步骤2：生成位置索引矩阵（0到C-1），形状(1, C)，广播到(N, C)
+    C = one_hot_label.shape[1]
+    pos_idx = torch.arange(C, device=one_hot_label.device).unsqueeze(0)  # (1, C)
+    
+    # 步骤3：将target_idx广播到(N, C)，计算绝对距离（核心！等价于原代码的序列）
+    target_idx_expand = target_idx.unsqueeze(1)  # (N, 1) → 广播到(N, C)
+    label_dist = torch.abs(pos_idx - target_idx_expand)  # 绝对距离，形状(N, C)
+    
+    return label_dist
+
 def loss_calc(pred, label, weights):
     """
     This function returns cross entropy loss for semantic segmentation
@@ -158,9 +211,16 @@ def loss_calc(pred, label, weights):
     # out shape batch_size x channels x h x w -> batch_size x channels x h x w
     # label shape h x w x 1 x batch_size  -> batch_size x 1 x h x w
     label = Variable(label.long()).cuda()
-    criterion = CrossEntropy2d_ignore().cuda()
-
-    return criterion(pred, label, weights)
+    #criterion = CrossEntropy2d_ignore().cuda()
+    n, c, h, w = pred.size()
+    target_mask = (label >= 0) * (label != -1)
+    label = label[target_mask]
+    pred = pred.transpose(1, 2).transpose(2, 3).contiguous()
+    pred = pred[target_mask.view(n, h, w, 1).repeat(1, 1, 1, c)].view(-1, c)
+    one_hot_label = F.one_hot(label, num_classes=N_CLASSES)
+    label = fast_label_to_dist(one_hot_label)
+    label = pdf_fn(label)
+    return manual_cross_entropy_with_soft_label(pred, label, dim=1)
 
 def CrossEntropy2d(input, target, weight=None, size_average=True):
     """ 2D version of the cross entropy loss """

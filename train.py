@@ -5,21 +5,19 @@ torch.cuda.device_count()
 import torch.optim as optim
 from torch.autograd import Variable
 from IPython.display import clear_output
-from config import convert_to_color, save_img,metrics,WeightedOrdinalLoss,accuracy,loss_calc,N_CLASSES,WINDOW_SIZE,BATCH_SIZE,MODE,LOSS,WEIGHTS
+from config import convert_to_color, save_img,metrics,WeightedOrdinalLoss,accuracy,loss_calc,N_CLASSES,WINDOW_SIZE,BATCH_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL
 from dataset import get_dataloader
 import os
 
-DATASET = 'amsterdam' #amsterdam hongkong
-MODEL = 'Dino' #Dino FTransUNet
 print(MODEL + ', ' + MODE + ', ' + DATASET + ', ' + LOSS)
-main_dir = './result/{}_{}gt'.format(MODEL, DATASET)
+main_dir = './result/{}_{}'.format(MODEL, DATASET)
 
 if not os.path.exists(main_dir):
     # os.makedirs()：创建文件夹，支持创建多级嵌套目录（如 "a/b/c/d"）
     os.makedirs(main_dir)
 
 if MODEL == 'Dino':
-    from model.singleDino.singleDino_simgle import UNetFormer as singleDino
+    from model.singleDino.singleDino_single import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'FTransUNet':
     from model.ftransunet.FUNet import VisionTransformer
@@ -41,6 +39,7 @@ val_set = get_dataloader(DATASET, 'val')
 val_loader = torch.utils.data.DataLoader(val_set,batch_size=BATCH_SIZE)
 print("training : ", len(train_set))
 print("val : ", len(val_set))
+print("test : ", len(test_set))
 
 base_lr = 0.01
 LBABDA_BDY = 0.1
@@ -77,13 +76,33 @@ def get_result(output,threshold=0.5):
     class_indices = torch.argmax(output, dim=1)
     return class_indices
 
-def test(net):
+def get_instance_metric(pred_instance, instance_label, label):
+
+    all_build=[]
+    correct_build=[]
+    for j in range(pred_instance.shape[0]): #batch size
+        instance_num = len(torch.unique(instance_label[j]))-1 # 减去背景类0，背景为-1
+        for i in range(instance_num): #每一个实例判断对不对
+            instance_mask = (instance_label[j] == i)
+            instance_label_i = pred_instance[j][instance_mask]
+            pred_instance_label = torch.mode(instance_label_i)[0].item() # 该实例的预测类别
+            label_i = torch.mode(label[j][instance_mask])[0].item() # 该实例的真实类别
+            all_build.append(label_i)
+            correct_build.append(pred_instance_label)
+            # if pred_instance_label == torch.mode(label_i)[0].item():
+            #     correct_build+=1  
+    
+    return (all_build,correct_build)
+
+def test(net, loader = val_loader):
    
     all_preds = []
     all_gts = []
+    all_build=[]
+    correct_build=[]
     # Switch the network to inference mode
     with torch.no_grad():
-        for batch_idx, (data, mask, height,ufzs, target) in enumerate(val_loader):
+        for batch_idx, (data, mask, height,ufzs, target) in enumerate(loader):
             data, mask,height,ufzs, target = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda())
             optimizer.zero_grad()
             output = net(data, height, mask, ufzs)
@@ -94,8 +113,12 @@ def test(net):
                     class_indices[target == -1]=-1
                     convert_to_color(class_indices[item], main_dir, name = "pred_{}".format(item))
                     convert_to_color(target[item], main_dir, name = "gt_{}".format(item))
-                    # save_img(data[item], main_dir, name = "img_{}".format(item))
+                    save_img(data[item], main_dir, name = "img_{}".format(item))
                     # save_img(height[item], main_dir, name = "height_{}".format(item))
+            instance_num,correct =get_instance_metric(class_indices, mask, target)
+            all_build.append(instance_num)
+            correct_build.append(correct)
+            
             valid_mask = target != -1   
             target = target[valid_mask]
             class_indices = class_indices[valid_mask]
@@ -103,7 +126,24 @@ def test(net):
             all_gts.append(target.cpu().numpy())
         accuracy = metrics(np.concatenate([p.ravel() for p in all_preds]),
                         np.concatenate([p.ravel() for p in all_gts]))
-    return accuracy
+        inatance_accuracy = metrics(np.concatenate(correct_build),np.concatenate(all_build))
+        # unique_vals, val_counts = np.unique(np.concatenate([p.ravel() for p in all_gts]), return_counts=True)
+        # print("="*50)
+        # print(f"mask数组共包含 {len(unique_vals)} 种唯一值")
+        # print("值 | 对应像素数量")
+        # print("-"*20)
+        # for val, count in zip(unique_vals, val_counts):
+        #     print(f"{val:>d} | {count:>8d} 个像素")
+        # print("="*50)
+        # unique_vals, val_counts = np.unique(np.concatenate(all_build), return_counts=True)
+        # print("="*50)
+        # print(f"mask数组共包含 {len(unique_vals)} 种唯一值")
+        # print("值 | 对应像素数量")
+        # print("-"*20)
+        # for val, count in zip(unique_vals, val_counts):
+        #     print(f"{val:>d} | {count:>8d} 个像素")
+        # print("="*50)
+        return accuracy
 
 
 def train(net, optimizer, epochs, scheduler=None, weights=WEIGHTS, save_epoch=3):
@@ -164,9 +204,8 @@ def train(net, optimizer, epochs, scheduler=None, weights=WEIGHTS, save_epoch=3)
 
 if MODE == 'train':
     train(net, optimizer, 50, scheduler)
-elif MODE == 'test':
-    if DATASET == 'Vaihingen':
-        net.load_state_dict(torch.load(main_dir + '/YOUR_MODEL')) # sam
-        net.eval()
-        MIoU, all_preds, all_gts = test(net)
-        print("MIoU: ", MIoU)
+if MODE == 'test':
+    net.load_state_dict(torch.load('/mnt/d/Jialu/buildingage/result/Dino_hongkongheight/Dino_epoch48_0.31642549688233534.pth')) # sam
+    net.eval()
+    MIoU, all_preds, all_gts = test(net,loader= train_loader)
+    print("MIoU: ", MIoU)

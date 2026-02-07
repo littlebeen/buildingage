@@ -4,6 +4,41 @@ import random
 import os
 import numpy as np
 from skimage import io
+from scipy.ndimage import label as label11
+from config import convert_to_color
+def generate_instance_mask(label_2d):
+    w, h = label_2d.shape
+    
+    # 步骤2：初始化实例mask（2D），背景初始为0
+    instance_mask_2d = np.zeros_like(label_2d, dtype=np.int32)
+    global_instance_id = 1  # 全局实例ID，从1开始编号
+    
+    # 步骤3：定义连通域规则（8连通：上下左右+四个对角线，可改为4连通[[0,1,0],[1,1,1],[0,1,0]]）
+    connectivity = np.ones((3, 3), dtype=np.bool_)  # 8连通结构元
+    
+    # 步骤4：遍历每一类（0-5），逐类检测连通域（不连续区域）
+    for cls in range(6):
+        # 生成当前类的掩码：仅当前类像素为True，其余（-1/其他类）为False
+        cls_mask = (label_2d == cls)
+        if np.sum(cls_mask) < 200:  # 该类别无像素，跳过
+            continue
+        
+        # 连通域检测：返回标记数组（同一连通域为相同编号）、连通域数量
+        labeled_cls, cls_instance_num = label11(cls_mask, structure=connectivity)
+        
+        # 遍历当前类的每个实例（每个连通域），分配全局唯一ID
+        for inst in range(1, cls_instance_num + 1):
+            # 找到当前类的当前实例的像素位置，赋值为全局ID
+            inst_pixel_pos = (labeled_cls == inst)
+            instance_mask_2d[inst_pixel_pos] = global_instance_id
+            global_instance_id += 1  # 全局ID自增，为下一个实例准备
+    
+    # 步骤5：恢复为1*w*h的3维结构，与输入维度一致
+    instance_mask = instance_mask_2d[np.newaxis, :, :]  # 形状恢复为(1, w, h)
+    total_instance_num = global_instance_id - 1  # 总实例数（最后一次自增后需减1）
+    
+    return instance_mask, total_instance_num
+
 
 def generate_first_impervious_year(imperv_data):
     # 步骤1：数据维度校验与标准化（确保输入为4×W×H，类型为np.ndarray）
@@ -13,7 +48,7 @@ def generate_first_impervious_year(imperv_data):
 
     # 步骤2：定义4个时相对应的年份（严格按1990/2000/2010/2020顺序）
     year_mapping = np.array([3, 4, 5, 6])
-    first_imperv_map = np.full(shape=(1, H, W), fill_value=-1, dtype=np.int32)
+    first_imperv_map = np.full(shape=(1, H, W), fill_value=0, dtype=np.int32)
 
     # 步骤3：创建有效像素掩码（排除缺测值0，仅保留1/2的有效像素）
     valid_mask = (imperv != 0)
@@ -23,7 +58,7 @@ def generate_first_impervious_year(imperv_data):
     first_imperv_idx = np.argmax(imperv_mask, axis=0)  # 形状(H, W)，值为0/1/2/3（对应4个时相）
     # 修正：无不透水面的有效像素，首次索引设为-1
     no_imperv = ~imperv_mask.any(axis=0)  # 形状(H, W)，True=全程无不透水面
-    first_imperv_idx[no_imperv] = -1
+    first_imperv_idx[no_imperv] = 0
 
     # 步骤5：验证首次不透化后是否永久保持（排除1→2→1的多次突变）
     permanent_imperv = np.zeros(shape=(H, W), dtype=bool)  # 形状(H, W)，True=永久不透化
@@ -45,7 +80,7 @@ def generate_first_impervious_year(imperv_data):
 
     ## 情况3：有效像素中全程透水（无不透水面）或多次突变（非永久不透化）→ 0（无建筑背景）
     background_pixel = (no_imperv | ~permanent_imperv) & valid_pixel  # 形状(H, W)
-    first_imperv_map[0, background_pixel] = -1
+    first_imperv_map[0, background_pixel] = 0
     return first_imperv_map
 
 
@@ -145,23 +180,29 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         label = label.astype(np.int64)
 
         label = get_year_type(label)
-        # unique_values1 = np.unique(label)
+        instance, instance_num = generate_instance_mask(label-1)
+        instance = instance[0]
+        # unique_values1 = np.unique(instance)
         # print(unique_values1)
+        # print(instance_num)
+        #convert_to_color(instance[0]-1, main_dir='.', name='instance_{}'.format(i))
 
         # Data augmentation
         # data_p, boundary_p, label_p = self.data_augmentation(data_p, boundary_p, label_p)
         if self.mode == 'train' and self.augmentation:
-            data, boundary, height, label, ufzs[0],ufzs[1], ufzs[2], ufzs[3] = self.data_augmentation(data, boundary, height, label,ufzs[0],ufzs[1], ufzs[2], ufzs[3])
+            data, boundary, height, label,instance, ufzs[0],ufzs[1], ufzs[2], ufzs[3] = self.data_augmentation(data, boundary, height, label,instance,ufzs[0],ufzs[1], ufzs[2], ufzs[3])
 
         height = height[np.newaxis, :, :]
         boundary = boundary[np.newaxis, :, :]
         # height = np.repeat(height, repeats=3, axis=0)
         ufzs = np.stack(ufzs, axis=0)
-        ufzs = generate_first_impervious_year(ufzs)
+        #ufzs = generate_first_impervious_year(ufzs).astype(np.float32)
         # unique_values1 = np.unique(ufzs)
         # print(unique_values1)
+        zero_mask = (instance == 0)
+        label[zero_mask] = 0
         return (torch.from_numpy(data),
-                torch.from_numpy(boundary),
+                torch.from_numpy(instance)-1 ,# -1 for ignore class,0-7大约是
                 torch.from_numpy(height),
-                torch.from_numpy(ufzs),
+                torch.from_numpy(ufzs-1),
                 torch.from_numpy(label)-1)
