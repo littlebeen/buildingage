@@ -6,6 +6,8 @@ import numpy as np
 from skimage import io
 from scipy.ndimage import label as label11
 from config import convert_to_color
+from scipy.stats import mode
+
 def generate_instance_mask(label_2d):
     w, h = label_2d.shape
     
@@ -181,7 +183,11 @@ class Hongkong_dataset(torch.utils.data.Dataset):
 
         label = get_year_type(label)
         instance, instance_num = generate_instance_mask(label-1)
-        instance = instance[0]
+        instance = instance[0]-1
+        instances = extract_instance_masks(instance)
+        instances_class=get_mask_classes(instances,label)
+        random_int = random.randint(0, len(instances)-1)
+        one_instances =instances[random_int]
         # unique_values1 = np.unique(instance)
         # print(unique_values1)
         # print(instance_num)
@@ -199,10 +205,54 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         #ufzs = generate_first_impervious_year(ufzs).astype(np.float32)
         # unique_values1 = np.unique(ufzs)
         # print(unique_values1)
-        zero_mask = (instance == 0)
+        zero_mask = (instance == -1)
         label[zero_mask] = 0
-        return (torch.from_numpy(data),
-                torch.from_numpy(instance)-1 ,# -1 for ignore class,0-7大约是
-                torch.from_numpy(height),
-                torch.from_numpy(ufzs-1),
-                torch.from_numpy(label)-1)
+        if self.mode == 'train' :
+              one_instances = one_instances[np.newaxis,:,:]
+              return (torch.from_numpy(data),
+                        torch.from_numpy(one_instances),
+                        torch.from_numpy(height),
+                        torch.from_numpy(ufzs-1),
+                        torch.from_numpy(label)-1,
+                        torch.from_numpy(np.array(instances_class[random_int]))-1)
+        else:
+            instances = np.array(instances)
+            return (torch.from_numpy(data),
+                    torch.from_numpy(instances),
+                    torch.from_numpy(height),
+                    torch.from_numpy(ufzs-1),
+                    torch.from_numpy(label)-1,
+                    torch.from_numpy(instances_class)-1)
+    
+
+def extract_instance_masks(instance_id_tensor) -> dict:
+    """
+    从W×H的instance ID张量中，提取每个instance的二值mask
+    :param instance_id_tensor: 形状(W, H)的tensor，像素值=instance编号（从0开始）
+    :return: 字典，key=instance编号，value=对应二值mask（W×H的bool tensor，1=该instance区域）
+    """
+    # 1. 获取图中所有非重复的instance编号（排除全0背景，若0是背景则过滤，否则保留）
+    unique_ids = np.unique(instance_id_tensor)
+    # 备注：若0是背景（无意义instance），则过滤：
+    unique_ids = unique_ids[unique_ids != -1]
+    
+    # 2. 向量化提取每个instance的二值mask（无循环）
+    instance_masks = []
+    for ins_id in unique_ids:
+        # 生成该instance的二值mask：像素值==ins_id的位置为True
+        mask = (instance_id_tensor == ins_id)
+        instance_masks.append(mask)
+    
+    return instance_masks
+
+
+def get_mask_classes(mask, label) -> np.ndarray:
+
+    mask_classes = np.zeros(len(mask), dtype=label.dtype)
+    for i in range(len(mask)):
+        mask_i = mask[i]  # (W, H)
+        label_masked = label[mask_i]  # (N,)，N为mask覆盖的像素数
+        
+        mask_classes[i] = mode(label_masked, keepdims=False).mode
+    
+    return mask_classes

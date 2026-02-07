@@ -33,10 +33,10 @@ train_set = get_dataloader(DATASET, 'train')
 train_loader = torch.utils.data.DataLoader(train_set,batch_size=BATCH_SIZE)
 
 test_set = get_dataloader(DATASET, 'test')
-test_loader = torch.utils.data.DataLoader(test_set,batch_size=BATCH_SIZE)
+test_loader = torch.utils.data.DataLoader(test_set,batch_size=1)
 
 val_set = get_dataloader(DATASET, 'val')
-val_loader = torch.utils.data.DataLoader(val_set,batch_size=BATCH_SIZE)
+val_loader = torch.utils.data.DataLoader(val_set,batch_size=1)
 print("training : ", len(train_set))
 print("val : ", len(val_set))
 print("test : ", len(test_set))
@@ -76,23 +76,23 @@ def get_result(output,threshold=0.5):
     class_indices = torch.argmax(output, dim=1)
     return class_indices
 
-def get_instance_metric(pred_instance, instance_label, label):
+# def get_instance_metric(pred_instance, instance_label, label):
 
-    all_build=[]
-    correct_build=[]
-    for j in range(pred_instance.shape[0]): #batch size
-        instance_num = len(torch.unique(instance_label[j]))-1 # 减去背景类0，背景为-1
-        for i in range(instance_num): #每一个实例判断对不对
-            instance_mask = (instance_label[j] == i)
-            instance_label_i = pred_instance[j][instance_mask]
-            pred_instance_label = torch.mode(instance_label_i)[0].item() # 该实例的预测类别
-            label_i = torch.mode(label[j][instance_mask])[0].item() # 该实例的真实类别
-            all_build.append(label_i)
-            correct_build.append(pred_instance_label)
-            # if pred_instance_label == torch.mode(label_i)[0].item():
-            #     correct_build+=1  
+#     all_build=[]
+#     correct_build=[]
+#     for j in range(pred_instance.shape[0]): #batch size
+#         instance_num = len(torch.unique(instance_label[j]))-1 # 减去背景类0，背景为-1
+#         for i in range(instance_num): #每一个实例判断对不对
+#             instance_mask = (instance_label[j] == i)
+#             instance_label_i = pred_instance[j][instance_mask]
+#             pred_instance_label = torch.mode(instance_label_i)[0].item() # 该实例的预测类别
+#             label_i = torch.mode(label[j][instance_mask])[0].item() # 该实例的真实类别
+#             all_build.append(label_i)
+#             correct_build.append(pred_instance_label)
+#             # if pred_instance_label == torch.mode(label_i)[0].item():
+#             #     correct_build+=1  
     
-    return (all_build,correct_build)
+#     return (all_build,correct_build)
 
 def test(net, loader = val_loader):
    
@@ -102,12 +102,12 @@ def test(net, loader = val_loader):
     correct_build=[]
     # Switch the network to inference mode
     with torch.no_grad():
-        for batch_idx, (data, mask, height,ufzs, target) in enumerate(loader):
+        for batch_idx, (data, mask, height,ufzs, target,instanc_class) in enumerate(loader):
             data, mask,height,ufzs, target = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda())
             optimizer.zero_grad()
             output = net(data, height, mask, ufzs)
-            outs = output.data.cpu().numpy()
-            class_indices = get_result(output)
+            class_indices = get_result(output[0])
+            instance_indices = get_result(output[1])
             if batch_idx==0:
                 for item in range(class_indices.shape[0]):
                     class_indices[target == -1]=-1
@@ -115,18 +115,21 @@ def test(net, loader = val_loader):
                     convert_to_color(target[item], main_dir, name = "gt_{}".format(item))
                     save_img(data[item], main_dir, name = "img_{}".format(item))
                     # save_img(height[item], main_dir, name = "height_{}".format(item))
-            instance_num,correct =get_instance_metric(class_indices, mask, target)
-            all_build.append(instance_num)
-            correct_build.append(correct)
-            
+            # instance_num,correct = get_instance_metric(class_indices, mask, target)
+            # all_build.append(instance_num)
+            # correct_build.append(correct)
+            all_build.append(instanc_class.cpu().numpy())
+            correct_build.append(instance_indices.cpu().numpy())
             valid_mask = target != -1   
             target = target[valid_mask]
             class_indices = class_indices[valid_mask]
             all_preds.append(class_indices.cpu().numpy())
             all_gts.append(target.cpu().numpy())
+            break
         accuracy = metrics(np.concatenate([p.ravel() for p in all_preds]),
                         np.concatenate([p.ravel() for p in all_gts]))
-        inatance_accuracy = metrics(np.concatenate(correct_build),np.concatenate(all_build))
+        inatance_accuracy = metrics(np.concatenate([p.ravel() for p in correct_build]),
+                        np.concatenate([p.ravel() for p in all_build]))
         # unique_vals, val_counts = np.unique(np.concatenate([p.ravel() for p in all_gts]), return_counts=True)
         # print("="*50)
         # print(f"mask数组共包含 {len(unique_vals)} 种唯一值")
@@ -158,20 +161,13 @@ def train(net, optimizer, epochs, scheduler=None, weights=WEIGHTS, save_epoch=3)
         if scheduler is not None:
             scheduler.step()
         net.train()
-        for batch_idx, (data, mask, height,ufzs, target) in enumerate(train_loader):
+        for batch_idx, (data, mask, height,ufzs, target,instanc_class) in enumerate(train_loader):
             data, mask,height,ufzs, target = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda())
             optimizer.zero_grad()
             output = net(data, height, mask, ufzs)
-            
             if LOSS == 'SEG':
-                loss_ce = loss_calc(output, target, weights)
+                loss_ce = loss_calc(output, target,instanc_class, weights)
                 loss = loss_ce
-            # elif LOSS == 'SEG+BDY':
-            #     loss = loss_ce + loss_boundary * LBABDA_BDY
-            # elif LOSS == 'SEG+OBJ':
-            #     loss = loss_ce + loss_object * LBABDA_OBJ
-            # elif LOSS == 'SEG+BDY+OBJ':
-            #     loss = loss_ce + loss_boundary * LBABDA_BDY + loss_object * LBABDA_OBJ
             if LOSS == 'ORD':
                 loss_ordinal = criterionor(output, target)
                 loss = loss_ordinal
@@ -183,7 +179,7 @@ def train(net, optimizer, epochs, scheduler=None, weights=WEIGHTS, save_epoch=3)
 
             if iter_ % 50 == 0:
                 clear_output()
-                pred = get_result(output)
+                pred = get_result(output[0])
                 pred = pred.data.cpu().numpy()[0]
                 gt = target.data.cpu().numpy()[0]
                 print('Train (epoch {}/{}) [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tAccuracy: {}'.format(
@@ -205,7 +201,7 @@ def train(net, optimizer, epochs, scheduler=None, weights=WEIGHTS, save_epoch=3)
 if MODE == 'train':
     train(net, optimizer, 50, scheduler)
 if MODE == 'test':
-    net.load_state_dict(torch.load('/mnt/d/Jialu/buildingage/result/Dino_hongkongheight/Dino_epoch48_0.31642549688233534.pth')) # sam
+    #net.load_state_dict(torch.load('/mnt/d/Jialu/buildingage/result/Dino_hongkongheight/Dino_epoch48_0.31642549688233534.pth')) # sam
     net.eval()
-    MIoU, all_preds, all_gts = test(net,loader= train_loader)
+    MIoU = test(net,loader= val_loader)
     print("MIoU: ", MIoU)

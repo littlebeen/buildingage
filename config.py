@@ -204,23 +204,29 @@ def fast_label_to_dist(one_hot_label):
     
     return label_dist
 
-def loss_calc(pred, label, weights):
+def loss_calc(pred, label,instanc_class, weights):
     """
     This function returns cross entropy loss for semantic segmentation
     """
     # out shape batch_size x channels x h x w -> batch_size x channels x h x w
     # label shape h x w x 1 x batch_size  -> batch_size x 1 x h x w
-    label = Variable(label.long()).cuda()
-    #criterion = CrossEntropy2d_ignore().cuda()
-    n, c, h, w = pred.size()
-    target_mask = (label >= 0) * (label != -1)
-    label = label[target_mask]
-    pred = pred.transpose(1, 2).transpose(2, 3).contiguous()
-    pred = pred[target_mask.view(n, h, w, 1).repeat(1, 1, 1, c)].view(-1, c)
-    one_hot_label = F.one_hot(label, num_classes=N_CLASSES)
-    label = fast_label_to_dist(one_hot_label)
-    label = pdf_fn(label)
-    return manual_cross_entropy_with_soft_label(pred, label, dim=1)
+    label= Variable(label.long()).cuda()
+    instanc_class = Variable(instanc_class.long()).cuda()
+    criterion_piexl = CrossEntropy2d_ignore().cuda()
+    piexl_loss = criterion_piexl(pred[0],label,weights)
+    instance_loss = CrossEntropy2d(pred[1],instanc_class)
+    loss = piexl_loss+instance_loss
+    return loss
+
+    # n, c, h, w = pred.size()
+    # target_mask = (label >= 0) * (label != -1)
+    # label = label[target_mask]
+    # pred = pred.transpose(1, 2).transpose(2, 3).contiguous()
+    # pred = pred[target_mask.view(n, h, w, 1).repeat(1, 1, 1, c)].view(-1, c)
+    # one_hot_label = F.one_hot(label, num_classes=N_CLASSES)
+    # label = fast_label_to_dist(one_hot_label)
+    # label = pdf_fn(label)
+    # return manual_cross_entropy_with_soft_label(pred, label, dim=1)
 
 def CrossEntropy2d(input, target, weight=None, size_average=True):
     """ 2D version of the cross entropy loss """
