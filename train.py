@@ -10,7 +10,7 @@ from dataset import get_dataloader
 import os
 
 print(MODEL + ', ' + MODE + ', ' + DATASET + ', ' + LOSS)
-main_dir = './result/{}_{}'.format(MODEL, DATASET)
+main_dir = './result/{}_{}mask'.format(MODEL, DATASET)
 
 if not os.path.exists(main_dir):
     # os.makedirs()：创建文件夹，支持创建多级嵌套目录（如 "a/b/c/d"）
@@ -113,7 +113,7 @@ def test(net, loader = val_loader):
                     class_indices[target == -1]=-1
                     convert_to_color(class_indices[item], main_dir, name = "pred_{}".format(item))
                     convert_to_color(target[item], main_dir, name = "gt_{}".format(item))
-                    save_img(data[item], main_dir, name = "img_{}".format(item))
+                    # save_img(data[item], main_dir, name = "img_{}".format(item))
                     # save_img(height[item], main_dir, name = "height_{}".format(item))
             # instance_num,correct = get_instance_metric(class_indices, mask, target)
             # all_build.append(instance_num)

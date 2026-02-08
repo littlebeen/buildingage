@@ -83,9 +83,12 @@ def save_img(tensor, main_dir, name):
     name = os.path.join(main_dir, name + ".jpg")
     if tensor.shape[0]==1:
         tensor = tensor.repeat(3, 1, 1)
-    tensor = tensor.cpu().permute((1,2,0))
+    if isinstance(tensor, torch.Tensor):
+        tensor = tensor.cpu().numpy()
+    if tensor.shape[0]==3:
+        tensor = np.transpose(tensor, axes=(1, 2, 0))
     # im = make_grid(tensor, normalize=True, scale_each=True, nrow=8, padding=2).permute((1, 2, 0))
-    im = (tensor.data.numpy() * 255.).astype(np.uint8)
+    im = (tensor * 255.).astype(np.uint8)
     im = Image.fromarray(im).save(name)
 
 
@@ -215,7 +218,7 @@ def loss_calc(pred, label,instanc_class, weights):
     criterion_piexl = CrossEntropy2d_ignore().cuda()
     piexl_loss = criterion_piexl(pred[0],label,weights)
     instance_loss = CrossEntropy2d(pred[1],instanc_class)
-    loss = piexl_loss+instance_loss
+    loss = piexl_loss
     return loss
 
     # n, c, h, w = pred.size()
