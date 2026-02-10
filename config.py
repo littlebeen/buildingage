@@ -13,8 +13,8 @@ import os
 from torch.nn.modules.loss import _Loss, _WeightedLoss
 
 
-DATASET = 'hongkong' #amsterdam hongkong
-MODEL = 'Dino' #Dino FTransUNet
+DATASET = 'hongkong' #amsterdam hongkong global_hongkong
+MODEL = 'Dino' #Dino FTransUNet Unetformer STunet
 
 # Parameters
 ## SwinFusion
@@ -29,7 +29,7 @@ BATCH_SIZE = 10 # Number of samples in a mini-batch
 #LABELS = ["<=1960", "1960<x<=1970", "1970<x<=1980", "1980<x<=1990", "1990<x<=2000", "2000<x<=2010", "2010<x<=2020"] # Label names
 if DATASET=='amsterdam':
     LABELS = ["x<1980", "1980<=x<=2000", "2000<x"] # Label names
-if DATASET=='hongkong':
+if DATASET=='hongkong' or DATASET=='global_hongkong':
     LABELS = ["<=1970", "1970<x<=1980", "1980<x<=1990","1990<x<=2000", "2000<x<=2010", "2000<x<=2020"] # Label names
 N_CLASSES = len(LABELS) # Number of classes
 WEIGHTS = torch.ones(N_CLASSES) # Weights for class balancing
@@ -218,7 +218,7 @@ def loss_calc(pred, label,instanc_class, weights):
     criterion_piexl = CrossEntropy2d_ignore().cuda()
     piexl_loss = criterion_piexl(pred[0],label,weights)
     instance_loss = CrossEntropy2d(pred[1],instanc_class)
-    loss = piexl_loss
+    loss = instance_loss + piexl_loss
     return loss
 
     # n, c, h, w = pred.size()
@@ -531,6 +531,10 @@ def metrics(predictions, gts, label_values=LABELS):
     mse = np.mean(diff_squared)
     rmse = np.sqrt(mse)
     print("RMSE : %.4f" % (rmse))
+
+    diff  = np.abs(gts-predictions)
+    mae = np.mean(diff)
+    print("MAE : %.4f" % (mae))
     print("---")
 
     return MIoU

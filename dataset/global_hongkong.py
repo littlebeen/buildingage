@@ -8,39 +8,39 @@ from scipy.ndimage import label as label11
 from config import convert_to_color,save_img
 from scipy.stats import mode
 
-def generate_instance_mask(label_2d):
-    w, h = label_2d.shape
-    
-    # 步骤2：初始化实例mask（2D），背景初始为0
-    instance_mask_2d = np.zeros_like(label_2d, dtype=np.int32)
-    global_instance_id = 1  # 全局实例ID，从1开始编号
-    
-    # 步骤3：定义连通域规则（8连通：上下左右+四个对角线，可改为4连通[[0,1,0],[1,1,1],[0,1,0]]）
-    connectivity = np.ones((3, 3), dtype=np.bool_)  # 8连通结构元
-    
-    # 步骤4：遍历每一类（0-5），逐类检测连通域（不连续区域）
-    for cls in range(6):
-        # 生成当前类的掩码：仅当前类像素为True，其余（-1/其他类）为False
-        cls_mask = (label_2d == cls)
-        if np.sum(cls_mask) < 200:  # 该类别无像素，跳过
-            continue
-        
-        # 连通域检测：返回标记数组（同一连通域为相同编号）、连通域数量
-        labeled_cls, cls_instance_num = label11(cls_mask, structure=connectivity)
-        
-        # 遍历当前类的每个实例（每个连通域），分配全局唯一ID
-        for inst in range(1, cls_instance_num + 1):
-            # 找到当前类的当前实例的像素位置，赋值为全局ID
-            inst_pixel_pos = (labeled_cls == inst)
-            instance_mask_2d[inst_pixel_pos] = global_instance_id
-            global_instance_id += 1  # 全局ID自增，为下一个实例准备
-    
-    # 步骤5：恢复为1*w*h的3维结构，与输入维度一致
-    instance_mask = instance_mask_2d[np.newaxis, :, :]  # 形状恢复为(1, w, h)
-    total_instance_num = global_instance_id - 1  # 总实例数（最后一次自增后需减1）
-    
-    return instance_mask, total_instance_num
+def generate_instance_mask(mask, ignore_bg = 0,min_pixel=160):
 
+    non_bg_mask = (mask != ignore_bg)
+    non_bg_ids = mask[non_bg_mask]
+    unique_ids, counts = np.unique(non_bg_ids, return_counts=True)
+    id_counts = dict(zip(unique_ids, counts))
+
+    invalid_ids = [id for id in unique_ids if id_counts[id] < min_pixel]
+    for invalid_id in invalid_ids:
+        mask[mask==invalid_id]=0
+
+
+    unique_ids = np.unique(mask[mask != ignore_bg])
+    unique_ids = np.sort(unique_ids)  # 排序确保映射顺序稳定
+    
+    # 2. 建立新旧编号的映射表（原大数值→连续0~n）
+    id_mapping = {old_id: new_id for new_id, old_id in enumerate(unique_ids)}
+    # 背景值保留原值（映射表中补充）
+    id_mapping[ignore_bg] = -1
+
+
+    
+    # 3. 向量化替换：用映射表将原mask值转为新编号（核心！无需循环）
+    # 步骤1：创建掩码，区分背景和instance
+    bg_mask = (mask == ignore_bg)
+    # 步骤2：对非背景区域做映射（利用np.vectorize向量化）
+    vectorized_map = np.vectorize(lambda x: id_mapping[x])
+    remapped_mask = vectorized_map(mask)
+    
+    # 验证：确保背景值未被修改（可选，增强鲁棒性）
+    assert np.all(remapped_mask[bg_mask] == -1), "背景值映射错误"
+    
+    return remapped_mask, id_mapping
 
 def generate_first_impervious_year(imperv_data):
     # 步骤1：数据维度校验与标准化（确保输入为4×W×H，类型为np.ndarray）
@@ -86,15 +86,6 @@ def generate_first_impervious_year(imperv_data):
     return first_imperv_map
 
 
-def get_year_type(arr_processed):
-    # arr_processed[(arr_processed >8) & (arr_processed <25)] = 1
-    # arr_processed[(arr_processed >35) & (arr_processed <55)] = 2
-    # arr_processed[arr_processed > 55] = 3
-    arr_processed-=1
-    arr_processed[arr_processed ==0] = 1
-    arr_processed[arr_processed ==-1] = 0
-    return arr_processed
-
 def get_ufz_type(arr_processed):
     arr_processed[(arr_processed >= 1) & (arr_processed <= 4)] = 1
     arr_processed[(arr_processed >= 5) & (arr_processed <= 9)] = 2
@@ -103,9 +94,11 @@ def get_ufz_type(arr_processed):
 class Hongkong_dataset(torch.utils.data.Dataset):
     def __init__(self, mode,cache=False, augmentation=True):
         super(Hongkong_dataset, self).__init__()
-        MAIN_FOLDER = '../dataset/hk_building_age/'+mode+'/'
+        if mode =='val' or mode =='train':
+            self.data_files=[]
+            return
+        MAIN_FOLDER = '../dataset/global_Hongkong/'
         DATA_FOLDER = MAIN_FOLDER + 'image/tdop*.tif'
-        self.LABEL_FOLDER = MAIN_FOLDER + 'class/'
         self.BOUNDARY_FOLDER = MAIN_FOLDER + 'mask/'
         self.HEIGHT_FOLDER = MAIN_FOLDER + 'height/'
         self.UFZ_FOLDER = MAIN_FOLDER + 'ufz/'
@@ -116,43 +109,10 @@ class Hongkong_dataset(torch.utils.data.Dataset):
 
         # List of files
         self.data_files = glob.glob(DATA_FOLDER)
-        # self.boundary_files = glob.glob(BOUNDARY_FOLDER)
-        # self.height_files = glob.glob(HEIGHT_FOLDER)
-        # self.label_files = glob.glob(LABEL_FOLDER)
-
-        # Sanity check : raise an error if some files do not exist
-        # for f in self.data_files + self.label_files:
-        #     if not os.path.isfile(f):
-        #         raise KeyError('{} is not a file !'.format(f))
-
 
     def __len__(self):
         # Default epoch size is 10 000 samples
         return len(self.data_files)
-
-    @classmethod
-    def data_augmentation(cls, *arrays, flip=True, mirror=True):
-        will_flip, will_mirror = False, False
-        if flip and random.random() < 0.5:
-            will_flip = True
-        if mirror and random.random() < 0.5:
-            will_mirror = True
-
-        results = []
-        for array in arrays:
-            if will_flip:
-                if len(array.shape) == 2:
-                    array = array[::-1, :]
-                else:
-                    array = array[:, ::-1, :]
-            if will_mirror:
-                if len(array.shape) == 2:
-                    array = array[:, ::-1]
-                else:
-                    array = array[:, :, ::-1]
-            results.append(np.copy(array))
-
-        return tuple(results)
 
     def __getitem__(self, i):
         name=self.data_files[i].split('/')[-1].split('.')[0].replace('image', '')
@@ -167,59 +127,40 @@ class Hongkong_dataset(torch.utils.data.Dataset):
 
         ufzs=[]
         for year in ['1990','2000','2010','2020']:
-            ufz = io.imread(self.UFZ_FOLDER+name+'ufz_'+year+'.tif')
-            ufz = np.asarray(ufz, dtype=np.float32)
-            ufz=get_ufz_type(ufz)
-            # unique_values1 = np.unique(ufz)
-            # print(unique_values1)
-            ufzs.append(ufz)
+            if os.path.exists(self.UFZ_FOLDER+name+'ufz_'+year+'.tif'):
+                ufz = io.imread(self.UFZ_FOLDER+name+'ufz_'+year+'.tif')
+                ufz = np.asarray(ufz, dtype=np.float32)
+                ufz=get_ufz_type(ufz)
+                # unique_values1 = np.unique(ufz)
+                # print(unique_values1)
+                ufzs.append(ufz)
+            else:
+                ufzs.append(np.zeros((512, 512)))
 
-        boundary_files = self.BOUNDARY_FOLDER+name+'mask.png'
-        boundary = np.asarray(io.imread(boundary_files)) / 255
-        boundary = boundary.astype(np.float32)
+        boundary_files = self.BOUNDARY_FOLDER+name+'mask.tif'
+        boundary = np.asarray(io.imread(boundary_files))
+        boundary = boundary.astype(np.int64)
 
-        label = np.asarray(io.imread(self.LABEL_FOLDER+name+'class.png'))
-        label = label.astype(np.int64)
-
-        label = get_year_type(label)
-        instance, instance_num = generate_instance_mask(label-1)
-        instance = instance[0]-1 #整张图的instance mask 从-1开始
+        instance, id_mapping = generate_instance_mask(boundary)
         instances = extract_instance_masks(instance) #转换为instance mask
-        instances_class=get_mask_classes(instances,label) #获得所有instance
-        random_int = random.randint(0, len(instances)-1)
-        one_instances =instances[random_int]
         # unique_values1 = np.unique(instance)
         # print(unique_values1)
         # print(instance_num)
         #convert_to_color(instance[0]-1, main_dir='.', name='instance_{}'.format(i))
 
-        # Data augmentation
-        if self.mode == 'train' and self.augmentation:
-            data, one_instances, boundary, height, label,instance, ufzs[0],ufzs[1], ufzs[2], ufzs[3] = self.data_augmentation(data, one_instances,boundary, height, label,instance,ufzs[0],ufzs[1], ufzs[2], ufzs[3])
         height = height[np.newaxis, :, :]
         boundary = boundary[np.newaxis, :, :]
         ufzs = np.stack(ufzs, axis=0)
         #ufzs = generate_first_impervious_year(ufzs).astype(np.float32)
-        label[instance == -1] = 0
         zero_mask = np.repeat((instance == -1)[np.newaxis, :, :], repeats=3, axis=0)
         data [zero_mask]= 0
         #save_img(data, './', name = "img_{}".format(1))
-        if self.mode == 'train' :
-              one_instances = one_instances[np.newaxis,:,:]
-              return (torch.from_numpy(data),
-                        torch.from_numpy(one_instances),
-                        torch.from_numpy(height),
-                        torch.from_numpy(ufzs-1),
-                        torch.from_numpy(label)-1,
-                        torch.from_numpy(np.array(instances_class[random_int]))-1)
-        else:
-            instances = np.array(instances)
-            return (torch.from_numpy(data),
-                    torch.from_numpy(instances),
-                    torch.from_numpy(height),
-                    torch.from_numpy(ufzs-1),
-                    torch.from_numpy(label)-1,
-                    torch.from_numpy(instances_class)-1)
+        instances = np.array(instances)
+        return (torch.from_numpy(data),
+                torch.from_numpy(instances),
+                torch.from_numpy(height),
+                torch.from_numpy(ufzs-1),
+                id_mapping)
     
 
 def extract_instance_masks(instance_id_tensor) -> dict:

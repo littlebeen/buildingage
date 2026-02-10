@@ -6,7 +6,6 @@ export CUDA_VISIBLE_DEVICES=1
 
 watch -n 1 nvidia-smi
 
-nohup python -u test_pcc.py > log_base1 2>&1 &
 
 nohup python -u train.py > log_base1 2>&1 &
 
