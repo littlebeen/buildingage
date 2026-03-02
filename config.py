@@ -15,6 +15,7 @@ from torch.nn.modules.loss import _Loss, _WeightedLoss
 
 DATASET = 'hongkong' #amsterdam hongkong global_hongkong
 MODEL = 'Dino' #Dino FTransUNet Unetformer STunet
+MODE = 'train'
 
 # Parameters
 ## SwinFusion
@@ -30,7 +31,7 @@ BATCH_SIZE = 10 # Number of samples in a mini-batch
 if DATASET=='amsterdam':
     LABELS = ["x<1980", "1980<=x<=2000", "2000<x"] # Label names
 if DATASET=='hongkong' or DATASET=='global_hongkong':
-    LABELS = ["<=1970", "1970<x<=1980", "1980<x<=1990","1990<x<=2000", "2000<x<=2010", "2000<x<=2020"] # Label names
+    LABELS = [ "x<=1970","1970<x<=1980", "1980<x<=1990","1990<x<=2000", "2000<x<=2010", "2000<x<=2020"] # Label names
 N_CLASSES = len(LABELS) # Number of classes
 WEIGHTS = torch.ones(N_CLASSES) # Weights for class balancing
 CACHE = True # Store the dataset in-memory
@@ -48,7 +49,6 @@ palette = {-1 : (255, 255, 255), # Undefined (white)
 
 invert_palette = {v: k for k, v in palette.items()}
 
-MODE = 'train'
 
 LOSS = 'SEG'  #ORD
 # LOSS = 'SEG+BDY'
@@ -158,7 +158,7 @@ class CrossEntropy2d_ignore(nn.Module):
             return Variable(torch.zeros(1))
         predict = predict.transpose(1, 2).transpose(2, 3).contiguous()
         predict = predict[target_mask.view(n, h, w, 1).repeat(1, 1, 1, c)].view(-1, c)
-        loss = F.cross_entropy(predict, target, weight=weight,reduction='mean')
+        loss = F.cross_entropy(predict, target, weight=None,reduction='mean')
         return loss
     
 
@@ -207,18 +207,35 @@ def fast_label_to_dist(one_hot_label):
     
     return label_dist
 
-def loss_calc(pred, label,instanc_class, weights):
+def get_instance_metric(pred_instance, instance_label, label):
+    pred_instance= pred_instance[0].permute(0,2,3,1) # [1,H,W,C]
+    all_build=[]
+    correct_build=[]    
+    for j in range(pred_instance.shape[0]): #batch size
+        instance_label_i = pred_instance[j][instance_label[j][0]]
+        mean_tensor = instance_label_i.mean(dim=0)
+        #pred_instance_label = torch.argmax(mean_tensor)
+        label_i = torch.mode(label[j][instance_label[j][0]])[0].item() # 该实例的真实类别
+        all_build.append(label_i)
+        correct_build.append(mean_tensor)
+    combined_tensor = torch.stack(correct_build, dim=1)
+    all_build = torch.tensor(all_build)
+    return (all_build,combined_tensor)
+
+def loss_calc(pred, label,boundary, weights):
     """
     This function returns cross entropy loss for semantic segmentation
     """
     # out shape batch_size x channels x h x w -> batch_size x channels x h x w
     # label shape h x w x 1 x batch_size  -> batch_size x 1 x h x w
     label= Variable(label.long()).cuda()
-    instanc_class = Variable(instanc_class.long()).cuda()
+    #instanc_class = Variable(instanc_class.long()).cuda()
     criterion_piexl = CrossEntropy2d_ignore().cuda()
     piexl_loss = criterion_piexl(pred[0],label,weights)
-    instance_loss = CrossEntropy2d(pred[1],instanc_class)
-    loss = instance_loss + piexl_loss
+    #isinstance_loss = get_instance_metric(pred,mask,label)
+    # instance_loss = CrossEntropy2d(pred[1],instanc_class)
+    #background_loss = F.binary_cross_entropy_with_logits(pred[1],boundary.float())
+    loss = piexl_loss
     return loss
 
     # n, c, h, w = pred.size()
@@ -538,3 +555,20 @@ def metrics(predictions, gts, label_values=LABELS):
     print("---")
 
     return MIoU
+
+def metrics_sinple(predictions, gts, label_values=LABELS):
+
+    cm = confusion_matrix(
+        gts,
+        predictions,
+        labels=range(len(label_values)))
+
+    # Compute global accuracy
+    total = sum(sum(cm))
+    accuracy = sum([cm[x][x] for x in range(len(cm))])
+    accuracy *= 100 / float(total)
+    # print("%d pixels processed" % (total))
+    print("Total accuracy : %.2f" % (accuracy))
+
+
+    return accuracy

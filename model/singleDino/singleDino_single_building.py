@@ -337,10 +337,10 @@ class Decoder(nn.Module):
 
         x = self.p1(x, res1)
 
-        x = self.segmentation_head(x)
-        x = F.interpolate(x, size=(h, w), mode='bilinear', align_corners=False)
+        x_piexl = self.segmentation_head(x)
+        x_piexl = F.interpolate(x_piexl, size=(h, w), mode='bilinear', align_corners=False)
 
-        return x
+        return x_piexl,x
 
     def init_weight(self):
         for m in self.children():
@@ -420,16 +420,6 @@ class UNetFormer(nn.Module):
             ),
             interaction_indexes=[23]
         )
-        mask_in_chans=16
-        self.mask_encoder = nn.Sequential(
-            nn.Conv2d(1, mask_in_chans // 4, kernel_size=2, stride=2),
-            LayerNorm2d(mask_in_chans // 4),
-            nn.GELU(),
-            nn.Conv2d(mask_in_chans // 4, mask_in_chans, kernel_size=2, stride=2),
-            LayerNorm2d(mask_in_chans),
-            nn.GELU(),
-            nn.Conv2d(mask_in_chans, 256, kernel_size=1),
-        )
 
         encoder_channels = (256, 256, 256, 256)
 
@@ -456,23 +446,50 @@ class UNetFormer(nn.Module):
         self.fpn3 = nn.Identity()
         self.fpn4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.classifier = nn.Sequential(
+            nn.Linear(64, 512),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(512, num_classes)
+        )
+
         self.decoder = Decoder(encoder_channels, decode_channels, dropout, window_size, num_classes)
 
     def forward(self, x, depth, mask,ufzs):
-        mask_inf=self.mask_encoder(mask)
         b, _, h, w = x.size()
-        deepx = self.image_encoder(x)  # 256*1024
-        #deepx2 = self.image_encoder(depth)  # 256*1024
-        #deepx2 = deepx2[0].permute(0, 2, 1).view(b, 1024, 32, 32)
+        deepx = self.image_encoder(x)  # 256*1024  
         deepx = deepx[0].permute(0, 2, 1).view(b, 1024, 32, 32)
         ## 这个deepx可由interaction_indexes这个控制，配了一个UNetformer的解码器，自行修改
-        #deepx = torch.cat([deepx,mask_inf],dim=1)
         deepx = self.neck(deepx)
         res1 = self.fpn1(deepx)
-        res1 = mask_inf+res1
         res2 = self.fpn2(deepx)
         res3 = self.fpn3(deepx)
         res4 = self.fpn4(deepx)
+        x_piexl,feat_map = self.decoder(res1, res2, res3, res4, h, w)
+        # 遍历该图的所有mask
 
-        x = self.decoder(res1, res2, res3, res4, h, w)
-        return x
+
+        # _, d, W_feat, H_feat = feat_map.shape
+        # _,n,_,_ =mask.shape
+        # mask_float = mask.float()
+        # mask_interp = nn.functional.interpolate(
+        #     mask_float, 
+        #     size=(W_feat, H_feat),  # 对齐特征图尺寸
+        #     mode='bilinear',        # 双线性插值（适合mask）
+        #     align_corners=False     # 避免边缘失真，推荐设置
+        # )
+        # feat_map = feat_map.detach()
+        # mask_expand = mask_interp.unsqueeze(2)  # 维度变为 B×3×1×W×H
+        # feat_map_expand = feat_map.unsqueeze(1)  # 维度变为 B×1×d×W×H
+        # masked_feat = feat_map_expand * mask_expand  # 核心逻辑保留，仅维度适配
+        # masked_feat_flat = masked_feat.reshape(b*n, d, W_feat, H_feat)  # 展平mask通道和batch
+        # ins_feat_flat = self.avg_pool(masked_feat_flat).squeeze()  # (B×3)×d（squeeze后去掉1×1维度）
+        # logits_flat = self.classifier(ins_feat_flat)  # (B×3)×num_classes
+        # logits = logits_flat.reshape(b, n, -1)  # -1自动匹配num_classes
+        # logits = logits.squeeze()
+
+        return x_piexl
+    
+
+
