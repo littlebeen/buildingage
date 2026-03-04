@@ -20,3 +20,4 @@ result/
 weights/
 *.pth
 log_base*
+*.txt

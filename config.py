@@ -34,6 +34,7 @@ if DATASET=='hongkong' or DATASET=='global_hongkong':
     LABELS = [ "x<=1970","1970<x<=1980", "1980<x<=1990","1990<x<=2000", "2000<x<=2010", "2000<x<=2020"] # Label names
 N_CLASSES = len(LABELS) # Number of classes
 WEIGHTS = torch.ones(N_CLASSES) # Weights for class balancing
+WEIGHTS[0] = 0.3
 CACHE = True # Store the dataset in-memory
 
 # ISPRS color palette

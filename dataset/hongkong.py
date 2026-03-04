@@ -118,20 +118,16 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         self.augmentation = augmentation
         self.cache = cache
         self.max_num=0
-
-        if mode == 'train':
-        # List of files
-            #self.data_files = random.sample(glob.glob(DATA_FOLDER), 2075)
-            self.data_files = glob.glob(DATA_FOLDER)
-            with open("train.txt", "r", encoding="utf-8") as f:
-                self.data_files +=[line.strip() for line in f if line.strip()]
-        else:
-            with open("test.txt", "r", encoding="utf-8") as f:
-                self.data_files = [line.strip() for line in f if line.strip()]
-            n=0
-        # self.boundary_files = glob.glob(BOUNDARY_FOLDER)
-        # self.height_files = glob.glob(HEIGHT_FOLDER)
-        # self.label_files = glob.glob(LABEL_FOLDER)
+        self.data_files = glob.glob(DATA_FOLDER)
+        # if mode == 'train':
+        # # List of files
+        #     #self.data_files = random.sample(glob.glob(DATA_FOLDER), 2075)
+        #     self.data_files = glob.glob(DATA_FOLDER)
+        #     with open("train.txt", "r", encoding="utf-8") as f:
+        #         self.data_files +=[line.strip() for line in f if line.strip()]
+        # else:
+        #     with open("test.txt", "r", encoding="utf-8") as f:
+        #         self.data_files = [line.strip() for line in f if line.strip()]
 
         # Sanity check : raise an error if some files do not exist
         # for f in self.data_files + self.label_files:
@@ -172,12 +168,12 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         data = io.imread(self.data_files[i])[:, :, :3].transpose((2, 0, 1))
         data = 1 / 255 * np.asarray(data, dtype='float32')
 
-        # height_files = self.HEIGHT_FOLDER+name+'height.tif'
-        # height = io.imread(height_files)
-        # height = np.asarray(height, dtype='float32')
-        # height = height - height.min()
-        # height = height / 500.0  # normalize to 0-1
-        # height = height[np.newaxis, :, :]
+        height_files = self.HEIGHT_FOLDER+name+'height.tif'
+        height = io.imread(height_files)
+        height = np.asarray(height, dtype='float32')
+        height = height - height.min()
+        height = height / 500.0  # normalize to 0-1
+        height = height[np.newaxis, :, :]
 
         # ufzs=[]
         # for year in ['1990','2000','2010','2020']:
@@ -188,11 +184,11 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         #     # print(unique_values1)
         #     ufzs.append(ufz)
 
-        # boundary_files = self.BOUNDARY_FOLDER+name+'mask.tif'
-        # boundary = np.asarray(io.imread(boundary_files))
-        # boundary = boundary.astype(np.int64)
-        # boundary[boundary>0]=1
-        # boundary = boundary[np.newaxis, :, :]
+        boundary_files = self.BOUNDARY_FOLDER+name+'mask.tif'
+        boundary = np.asarray(io.imread(boundary_files))
+        boundary = boundary.astype(np.int64)
+        boundary[boundary>0]=1
+        boundary = boundary[np.newaxis, :, :]
 
         label = np.asarray(io.imread(self.LABEL_FOLDER+name+'class.png'))
         label = label.astype(np.int64)
@@ -225,36 +221,25 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         # convert_to_color(label-1, main_dir='.', name='instance_{}'.format(i))
         if self.mode == 'train' :
               one_instances = one_instances[np.newaxis,:,:]
-            #   return (torch.from_numpy(data),
-            #             torch.from_numpy(one_instances),
-            #             torch.from_numpy(height),
-            #             torch.from_numpy(ufzs-1),
-            #             torch.from_numpy(label)-1,
-            #             torch.from_numpy(boundary),
-            #             self.data_files[i])
+
               return (torch.from_numpy(data),
                         torch.from_numpy(one_instances),
-                        torch.from_numpy(data),
+                        torch.from_numpy(height),
+                        #torch.from_numpy(ufzs-1),
                         torch.from_numpy(data),
                         torch.from_numpy(label)-1,
-                        torch.from_numpy(data),
+                        torch.from_numpy(boundary),
                         self.data_files[i])
         else:
             instances = np.array(instances)  
             assert len(instances)==len(instances_class)
-            # return (torch.from_numpy(data),
-            #         torch.from_numpy(instances),
-            #         torch.from_numpy(height),
-            #         torch.from_numpy(ufzs-1),
-            #         torch.from_numpy(label)-1,
-            #         torch.from_numpy(boundary),
-            #         self.data_files[i])
             return (torch.from_numpy(data),
                         torch.from_numpy(instances),
-                        torch.from_numpy(data),
+                        torch.from_numpy(height),
+                        #torch.from_numpy(ufzs-1),
                         torch.from_numpy(data),
                         torch.from_numpy(label)-1,
-                        torch.from_numpy(data),
+                        torch.from_numpy(boundary),
                         self.data_files[i])
     
 
