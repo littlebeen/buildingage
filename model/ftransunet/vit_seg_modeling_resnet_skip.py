@@ -255,7 +255,7 @@ class FuseResNetV2(nn.Module):
                 ))),
         ]))
 
-    def forward(self, x, y):
+    def forward(self, x, y,boundary, ufzs):
         SE = True
         # SE = False
         features = []

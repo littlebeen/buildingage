@@ -260,9 +260,9 @@ class Embeddings(nn.Module):
 
 
     def forward(self, x, y):
-        y = y.unsqueeze(1)
+        #y = y.unsqueeze(1)
         if self.hybrid:
-            x, y, features = self.hybrid_model(x, y)
+            x, y, features = self.hybrid_model(x, y,1,1)
         else:
             features = None
         x = self.patch_embeddings(x)  # (B, hidden. n_patches^(1/2), n_patches^(1/2))
@@ -541,7 +541,7 @@ class VisionTransformer(nn.Module):
         x = x + y
         x = self.decoder(x, features)
         logits = self.segmentation_head(x)
-        return logits
+        return logits,1
 
     def load_from(self, weights):
         with torch.no_grad():
