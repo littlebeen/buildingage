@@ -14,7 +14,7 @@ from torch.nn.modules.loss import _Loss, _WeightedLoss
 
 
 DATASET = 'hongkong' #amsterdam hongkong global_hongkong
-MODEL = 'Dino' #Dino FTransUNet Unetformer STunet
+MODEL = 'STunet' #Dino FTransUNet Unetformer STunet
 MODE = 'train'
 
 # Parameters
@@ -544,17 +544,6 @@ def metrics(predictions, gts, label_values=LABELS):
     MIoU = np.nanmean(MIoU[:5])
     print('mean MIoU: %.4f' % (MIoU))
 
-    diff  = gts-predictions
-    diff_squared = np.square(diff)
-    mse = np.mean(diff_squared)
-    rmse = np.sqrt(mse)
-    print("RMSE : %.4f" % (rmse))
-
-    diff  = np.abs(gts-predictions)
-    mae = np.mean(diff)
-    print("MAE : %.4f" % (mae))
-    print("---")
-
     return MIoU
 
 def metrics_sinple(predictions, gts, label_values=LABELS):
@@ -571,5 +560,36 @@ def metrics_sinple(predictions, gts, label_values=LABELS):
     # print("%d pixels processed" % (total))
     print("Total accuracy : %.2f" % (accuracy))
 
-
     return accuracy
+
+
+def change_back_year(predictions):
+    # 将预测的类别标签转换回对应的建筑年代
+    year_mapping = {
+        0: 1965,
+        1: 1975,
+        2: 1988,
+        3: 1995,
+        4: 2005,
+        5: 2015,
+    }
+    # 使用向量化操作进行转换
+    vectorized_mapping = np.vectorize(year_mapping.get)
+    predicted_years = vectorized_mapping(predictions)
+    return predicted_years
+
+def mse_rmse(predictions, gts):
+    zero_mask = (gts != 0)
+    gts = gts[zero_mask]
+    predictions = predictions[zero_mask] 
+    predictions = change_back_year(predictions)
+    diff  = gts-predictions
+    diff_squared = np.square(diff)
+    mse = np.mean(diff_squared)
+    rmse = np.sqrt(mse)
+    print("RMSE : %.4f" % (rmse))
+
+    diff  = np.abs(gts-predictions)
+    mae = np.mean(diff)
+    print("MAE : %.4f" % (mae))
+    print("---")

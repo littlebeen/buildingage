@@ -5,10 +5,10 @@ torch.cuda.device_count()
 import torch.optim as optim
 from torch.autograd import Variable
 from IPython.display import clear_output
-from config import convert_to_color, save_img,metrics,metrics_sinple,WeightedOrdinalLoss,accuracy,loss_calc,N_CLASSES,WINDOW_SIZE,BATCH_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL
+from config import convert_to_color, mse_rmse, save_img,metrics,metrics_sinple,WeightedOrdinalLoss,accuracy,loss_calc,N_CLASSES,WINDOW_SIZE,BATCH_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL
 from dataset import get_dataloader
 import os
-
+from kmean import extract_building_features
 print(MODEL + ', ' + MODE + ', ' + DATASET + ', ' + LOSS)
 main_dir = './result/{}_{}'.format(MODEL, DATASET)
 
@@ -36,16 +36,12 @@ print(params)
 
 # Load the datasets
 train_set = get_dataloader(DATASET, 'train')
-train_loader = torch.utils.data.DataLoader(train_set,batch_size=BATCH_SIZE,shuffle=True)
-
-test_set = get_dataloader(DATASET, 'test')
-test_loader = torch.utils.data.DataLoader(test_set,batch_size=1)
+train_loader = torch.utils.data.DataLoader(train_set,batch_size=5,shuffle=False)
 
 val_set = get_dataloader(DATASET, 'val')
 val_loader = torch.utils.data.DataLoader(val_set,batch_size=1)
 print("training : ", len(train_set))
 print("val : ", len(val_set))
-print("test : ", len(test_set))
 
 base_lr = 0.01
 params_dict = dict(net.named_parameters())
@@ -60,8 +56,8 @@ for key, value in params_dict.items():
 
 optimizer = optim.SGD(net.parameters(), lr=base_lr, momentum=0.9, weight_decay=0.0005)
 # We define the scheduler
-scheduler = optim.lr_scheduler.MultiStepLR(optimizer, [25, 35, 45], gamma=0.1)
-
+#scheduler = optim.lr_scheduler.MultiStepLR(optimizer, [25, 35, 45], gamma=0.1)
+scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[15, 25, 35], gamma=0.25)
 # def get_result(output,threshold=0.5):
 #     input_ordinal = output[:, :-1, :, :]  # 取前C-1个通道，shape [1, C-1, H, W]
 #     sigmoid_probs = torch.sigmoid(input_ordinal)  # 激活为0~1的概率值
@@ -80,10 +76,11 @@ def get_result(output,threshold=0.5):
     class_indices = torch.argmax(output, dim=1)
     return class_indices
 
-def get_instance_metric(pred_instance, instance_label, label):
+def get_instance_metric(pred_instance, instance_label,instance_year, label):
     pred_instance= pred_instance.permute(0,2,3,1) # [1,H,W,C]
     all_build=[]
     correct_build=[]
+    all_building_year=[]
     for j in range(pred_instance.shape[0]): #batch size
         for i in range(len(instance_label)): #每一个实例判断对不对
             instance_label_i = pred_instance[j][instance_label[i]]
@@ -91,9 +88,11 @@ def get_instance_metric(pred_instance, instance_label, label):
             pred_instance_label = torch.argmax(mean_tensor)
             # pred_instance_label = torch.mode(instance_label_i)[0].item() # 该实例的预测类别
             label_i = torch.mode(label[j][instance_label[i]])[0].item() # 该实例的真实类别
+            label_i_year = torch.mode(instance_year[j][instance_label[i]])[0].item() # 该实例的真实建造年份
+            all_building_year.append(label_i_year)
             all_build.append(label_i)
             correct_build.append(pred_instance_label.cpu())
-    return (all_build,correct_build)
+    return (all_build,correct_build, all_building_year)
 
 def get_mask_number(pred_instance,masks):
     result = torch.zeros(masks.shape[1])
@@ -107,14 +106,15 @@ def test(net, first=False,loader = val_loader):
     all_preds = []
     all_gts = []
     all_build=[]
+    all_build_year=[]
     correct_build=[]
     file_list=[]
     file_list2=[]
     # Switch the network to inference mode
     j=0
     with torch.no_grad():
-        for batch_idx, (data, mask, height,ufzs, target,boundary, file_name) in enumerate(loader):
-            data, mask,height,ufzs, target,boundary = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda())
+        for batch_idx, (data, mask, height,ufzs, target,boundary, label_year) in enumerate(loader):
+            data, mask,height,ufzs, target,boundary, label_year = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda()), Variable(label_year.cuda())
             output = net(data, height, boundary, ufzs)
             class_indices = get_result(output[0])
             # if batch_idx==0:
@@ -124,14 +124,14 @@ def test(net, first=False,loader = val_loader):
             #         convert_to_color(target[item], main_dir, name = "gt_{}".format(item))
                     # save_img(data[item], main_dir, name = "img_{}".format(item))
                     # save_img(height[item], main_dir, name = "height_{}".format(item))
-            instance_num,correct = get_instance_metric(output[0], mask[0], target)
+            instance_num,correct,all_building_year = get_instance_metric(output[0], mask[0],label_year, target)
             # all_build.append(instanc_class[0].cpu().numpy())
             # correct_build.append(instance_indices.cpu().numpy())
             # assert len(instanc_class[0])==len(instance_indices)
             valid_mask = target != -1
             target = target[valid_mask]
             class_indices = class_indices[valid_mask]
-            if first and batch_idx>10:
+            if first and batch_idx>5:
                 break
             
             # time_pred=[]
@@ -146,6 +146,8 @@ def test(net, first=False,loader = val_loader):
             all_preds.append(class_indices.cpu().numpy())
             all_gts.append(target.cpu().numpy())
             all_build.append(instance_num)
+            all_build_year.append(all_building_year)
+
             correct_build.append(correct)
 
             # accuracy = metrics_sinple(np.concatenate([p.ravel() for p in time_pred]),
@@ -174,6 +176,8 @@ def test(net, first=False,loader = val_loader):
                             np.concatenate([p.ravel() for p in all_gts]))
         instance_accuracy = metrics_sinple(np.concatenate([p for p in correct_build]),
                             np.concatenate([p for p in all_build]))
+        mse_rmse(np.concatenate([p for p in correct_build]),
+                            np.concatenate([p for p in all_build_year]))
         # unique_vals, val_counts = np.unique(np.concatenate([p.ravel() for p in all_gts]), return_counts=True)
         # print("="*50)
         # print(f"mask数组共包含 {len(unique_vals)} 种唯一值")
@@ -258,16 +262,20 @@ def train(net, optimizer, epochs, scheduler=None, weights=WEIGHTS, save_epoch=3)
     iter_ = 0
     MIoU_best = 0.15
     criterionor = WeightedOrdinalLoss(num_classes = N_CLASSES)
+    mask_list = []
+    feature_list = []
     for e in range(1, epochs + 1):
         if e == 1:
             test(net, first=True)
         if scheduler is not None:
             scheduler.step()
         net.train()
-        for batch_idx, (data, mask, height,ufzs, target,boundary,file_name) in enumerate(train_loader):
-            data, mask,height,ufzs, target,boundary = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda())
+        for batch_idx, (data, mask, height,ufzs, target,boundary,label_year) in enumerate(train_loader):
+            data,height,ufzs, target,boundary = Variable(data.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda())
             optimizer.zero_grad()
             output = net(data, height, boundary, ufzs)
+            # mask_list.append(mask.cpu())
+            # feature_list.append(output[1].cpu())
             if LOSS == 'SEG':
                 loss_ce = loss_calc(output, target,boundary, weights)
                 loss = loss_ce
@@ -275,6 +283,7 @@ def train(net, optimizer, epochs, scheduler=None, weights=WEIGHTS, save_epoch=3)
                 loss_ordinal = criterionor(output, target)
                 loss = loss_ordinal
             loss.backward()
+            #grad_norm = torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
             optimizer.step()
 
             losses[iter_] = loss.data
@@ -291,13 +300,10 @@ def train(net, optimizer, epochs, scheduler=None, weights=WEIGHTS, save_epoch=3)
             iter_ += 1
 
             del (data, target, loss)
-
+        # extract_building_features(mask_list, feature_list)
         if e % save_epoch == 0:
             # We validate with the largest possible stride for faster computing
-            if MODEL in ['STunet', 'Unetformer']:
-                MIoU=test_semantic(net)
-            else:
-                MIoU = test(net)
+            MIoU = test(net)
             net.train()
             if MIoU > MIoU_best:
                 torch.save(net.state_dict(), main_dir + '/{}_epoch{}_{}.pth'.format(MODEL, e, MIoU))
@@ -306,10 +312,10 @@ def train(net, optimizer, epochs, scheduler=None, weights=WEIGHTS, save_epoch=3)
 if MODE == 'train':
     train(net, optimizer, 50, scheduler)
 if MODE == 'test':
-    net.load_state_dict(torch.load('/mnt/d/Jialu/buildingage/Dino_epoch48_0.3410800487460623.pth'),strict=True) 
+    net.load_state_dict(torch.load('./Dino_epoch42_0.4564934817950233.pth'),strict=True) 
     net.eval()
     if DATASET=='global_hongkong':
-        test_all(net,test_loader)
+        test_all(net,val_loader)
     else:
         MIoU = test(net,loader= val_loader)
         print("MIoU: ", MIoU)

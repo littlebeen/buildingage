@@ -88,7 +88,8 @@ def generate_first_impervious_year(imperv_data):
 
 
 
-def get_year_type(arr_processed):
+def get_year_type(label):
+    arr_processed=label.copy()
     arr_processed[(arr_processed <= 1970) & (arr_processed > 1)] = 1
     arr_processed[(arr_processed >= 1970) & (arr_processed < 1980)] = 2
     arr_processed[(arr_processed >= 1980) & (arr_processed < 1990)] = 3
@@ -185,12 +186,13 @@ class Hongkong_dataset(torch.utils.data.Dataset):
 
         label = np.asarray(io.imread(self.LABEL_FOLDER+name+'class.tif'))
         label = label.astype(np.int64)
-        label = get_year_type(label) #背景为0
+        
+        label_id = get_year_type(label) #背景为0
 
         boundary_files = self.BOUNDARY_FOLDER+name+'mask.tif'
         boundary = np.asarray(io.imread(boundary_files))
         boundary = boundary.astype(np.int64)
-        zero_mask = (label == 0)
+        zero_mask = (label_id == 0)
         boundary[zero_mask] = 0
         instance, instance_num = generate_instance_mask(boundary)
         boundary = boundary[np.newaxis, :, :]
@@ -198,7 +200,8 @@ class Hongkong_dataset(torch.utils.data.Dataset):
 
         instance = instance-1 #整张图的instance mask 从-1开始
         instances = extract_instance_masks(instance) #转换为instance mask
-        # instances_class=get_mask_classes(instances,label) #获得所有instance
+        label_id[instance == -1] = 0
+        # instances_class=get_mask_classes(instances,label_id) #获得所有instance
         # random_int = random.randint(0, len(instances)-1)
         # one_instances =instances[random_int]
         # unique_values1 = np.unique(instance)
@@ -209,41 +212,39 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         # Data augmentation
         if self.mode == 'train' and self.augmentation:
             #data, one_instances, boundary, height, label,instance, ufzs[0],ufzs[1], ufzs[2], ufzs[3] = self.data_augmentation(data, one_instances,boundary, height, label,instance,ufzs[0],ufzs[1], ufzs[2], ufzs[3])
-            data, boundary, height,label,instance = self.data_augmentation(data,boundary, height, label,instance)
+            data, boundary, height,label,instance,label_id = self.data_augmentation(data,boundary, height, label,instance,label_id)
         # ufzs = np.stack(ufzs, axis=0)
         # ufzs = generate_first_impervious_year(ufzs).astype(np.float32)
-        label[instance == -1] = 0
 
-        #zero_mask = np.repeat((instance == -1)[np.newaxis, :, :], repeats=3, axis=0)
+        # zero_mask = np.repeat((instance == -1)[np.newaxis, :, :], repeats=3, axis=0)
         # save_img(data, './', name = "imgpre_{}".format(1))
-        #data [zero_mask]= 0
-        #save_img(data, './', name = "img_{}".format(1))
+        # data [zero_mask]= 0
+        # save_img(data, './', name = "img_{}".format(1))
         # save_img(one_instances, './', name = "mask_{}".format(1))
         # convert_to_color(label-1, main_dir='.', name='instance_{}'.format(i))
         # if random.random() < 0.5:
         #     height[:]=0
         instances = np.array(instances)  
-        if self.mode == 'train' :
-            #   one_instances = one_instances[np.newaxis,:,:]
-
-              return (torch.from_numpy(data),
-                        torch.from_numpy(instances),
-                        torch.from_numpy(height),
-                        #torch.from_numpy(ufzs-1),
-                        torch.from_numpy(data),
-                        torch.from_numpy(label)-1,
-                        torch.from_numpy(boundary),
-                        self.data_files[i])
+        if self.mode == 'train':
+            return (torch.from_numpy(data),
+                    torch.from_numpy(data), #无用之前是instances表示每一个instance 的mask，但train里面没有用到，先放data占位
+                    torch.from_numpy(height),
+                    #torch.from_numpy(ufzs-1),
+                    torch.from_numpy(data),
+                    torch.from_numpy(label_id)-1,
+                    torch.from_numpy(boundary),
+                    torch.from_numpy(label)
+                    )
         else:
             return (torch.from_numpy(data),
-                        torch.from_numpy(instances),
-                        torch.from_numpy(height),
-                        #torch.from_numpy(ufzs-1),
-                        torch.from_numpy(data),
-                        torch.from_numpy(label)-1,
-                        torch.from_numpy(boundary),
-                        self.data_files[i])
-    
+                    torch.from_numpy(instances),
+                    torch.from_numpy(height),
+                    #torch.from_numpy(ufzs-1),
+                    torch.from_numpy(data),
+                    torch.from_numpy(label_id)-1,
+                    torch.from_numpy(boundary),
+                    torch.from_numpy(label)
+                    )
 
 def extract_instance_masks(instance_id_tensor) -> dict:
     """
