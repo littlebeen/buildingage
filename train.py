@@ -5,7 +5,7 @@ torch.cuda.device_count()
 import torch.optim as optim
 from torch.autograd import Variable
 from IPython.display import clear_output
-from config import convert_to_color, mse_rmse, save_img,metrics,metrics_sinple,WeightedOrdinalLoss,accuracy,loss_calc,N_CLASSES,WINDOW_SIZE,BATCH_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL
+from config import convert_to_color, mse_rmse, DATASET,save_img,metrics,metrics_sinple,WeightedOrdinalLoss,accuracy,loss_calc,N_CLASSES,WINDOW_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL
 from dataset import get_dataloader
 import os
 from kmean import extract_building_features
@@ -24,10 +24,19 @@ if MODEL == 'FTransUNet':
     net = VisionTransformer(img_size=WINDOW_SIZE[0], num_classes=N_CLASSES).cuda()
 if MODEL == 'Unetformer':
     from model.unetformer.unetformer import UNetFormer
-    net = UNetFormer( num_classes=N_CLASSES).cuda()
+    net = UNetFormer(num_classes=N_CLASSES).cuda()
 if MODEL == 'STunet':
     from model.ST_Unet.vit_seg_modeling import ST_Unet
     net = ST_Unet(img_size=WINDOW_SIZE[0],num_classes=N_CLASSES).cuda()
+if MODEL == 'AsymFormer':
+    from model.asymformer.AsymFormer import B0_T
+    net = B0_T(num_classes=N_CLASSES).cuda()
+if MODEL == 'CMTFNet':
+    from model.CMTFNet.CMTFNet import CMTFNet
+    net = CMTFNet(num_classes=N_CLASSES).cuda()
+if MODEL == 'ABCNet':
+    from model.ABCNet.ABCNet import ABCNet
+    net = ABCNet(num_classes=N_CLASSES).cuda()
 
 params = 0
 for name, param in net.named_parameters():
@@ -36,7 +45,7 @@ print(params)
 
 # Load the datasets
 train_set = get_dataloader(DATASET, 'train')
-train_loader = torch.utils.data.DataLoader(train_set,batch_size=5,shuffle=False)
+train_loader = torch.utils.data.DataLoader(train_set,batch_size=10,shuffle=True)
 
 val_set = get_dataloader(DATASET, 'val')
 val_loader = torch.utils.data.DataLoader(val_set,batch_size=1)
@@ -196,16 +205,16 @@ def test(net, first=False,loader = val_loader):
         # print("="*50)
         return accuracy
 
-def test_semantic(net, loader = val_loader):
+def test_semantic(net,first=False, loader = val_loader):
     net.eval()
     all_preds = []
     all_gts = []
     # Switch the network to inference mode
     with torch.no_grad():
-        for batch_idx, (data, mask, height,ufzs, target,instanc_class) in enumerate(loader):
-            data, mask,height,ufzs, target,instanc_class = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(instanc_class.cuda())
+        for batch_idx, (data, mask, height,ufzs, target,boundary,label_year) in enumerate(loader):
+            data, mask,height,ufzs, target = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda())
             optimizer.zero_grad()
-            output = net(data, height, mask, ufzs)
+            output = net(data, height, boundary, ufzs)
             class_indices = get_result(output[0])
             if batch_idx==0:
                 for item in range(class_indices.shape[0]):
@@ -219,6 +228,8 @@ def test_semantic(net, loader = val_loader):
             class_indices = class_indices[valid_mask]
             all_preds.append(class_indices.cpu().numpy())
             all_gts.append(target.cpu().numpy())
+            if first and batch_idx>5:
+                break
         accuracy = metrics(np.concatenate([p.ravel() for p in all_preds]),
                         np.concatenate([p.ravel() for p in all_gts]))
 
@@ -254,7 +265,7 @@ def test_all(net, loader = val_loader):
     return max_ids
 
 
-def train(net, optimizer, epochs, scheduler=None, weights=WEIGHTS, save_epoch=3):
+def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS, save_epoch=3):
     losses = np.zeros(1000000)
     mean_losses = np.zeros(100000000)
     weights = weights.cuda()
@@ -266,7 +277,7 @@ def train(net, optimizer, epochs, scheduler=None, weights=WEIGHTS, save_epoch=3)
     feature_list = []
     for e in range(1, epochs + 1):
         if e == 1:
-            test(net, first=True)
+            test_function(net, first=True)
         if scheduler is not None:
             scheduler.step()
         net.train()
@@ -303,19 +314,21 @@ def train(net, optimizer, epochs, scheduler=None, weights=WEIGHTS, save_epoch=3)
         # extract_building_features(mask_list, feature_list)
         if e % save_epoch == 0:
             # We validate with the largest possible stride for faster computing
-            MIoU = test(net)
+            MIoU = test_function(net, val_loader)
             net.train()
             if MIoU > MIoU_best:
                 torch.save(net.state_dict(), main_dir + '/{}_epoch{}_{}.pth'.format(MODEL, e, MIoU))
                 MIoU_best = MIoU
 
+test_function = test_semantic if DATASET=='amsterdam' else test
+
 if MODE == 'train':
-    train(net, optimizer, 50, scheduler)
+    train(net, optimizer, 70, test_function, scheduler)
 if MODE == 'test':
     net.load_state_dict(torch.load('./Dino_epoch42_0.4564934817950233.pth'),strict=True) 
     net.eval()
     if DATASET=='global_hongkong':
         test_all(net,val_loader)
     else:
-        MIoU = test(net,loader= val_loader)
+        MIoU = test_function(net, loader=val_loader)
         print("MIoU: ", MIoU)

@@ -79,4 +79,5 @@ class Amsterdam_dataset(torch.utils.data.Dataset):
                 torch.from_numpy(data),
                 torch.from_numpy(data),
                 torch.from_numpy(label)-1,
-                torch.from_numpy(label)-1)
+                torch.from_numpy(label)-1,
+                torch.from_numpy(data))
