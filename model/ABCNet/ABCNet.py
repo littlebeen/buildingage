@@ -296,7 +296,7 @@ class ABCNet(nn.Module):
             self.conv_out32 = Output(128, 64, num_classes, up_factor=16)
         self.init_weight()
 
-    def forward(self, x, *args, **kwargs):
+    def forward(self, x,height,mask, ufzs):
         H, W = x.size()[2:]
         feat_cp8, feat_cp16, feat_cp32 = self.cp(x)
         feat_sp = self.sp(x)

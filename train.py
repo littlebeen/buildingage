@@ -314,7 +314,7 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
         # extract_building_features(mask_list, feature_list)
         if e % save_epoch == 0:
             # We validate with the largest possible stride for faster computing
-            MIoU = test_function(net, val_loader)
+            MIoU = test_function(net)
             net.train()
             if MIoU > MIoU_best:
                 torch.save(net.state_dict(), main_dir + '/{}_epoch{}_{}.pth'.format(MODEL, e, MIoU))

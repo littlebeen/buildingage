@@ -256,7 +256,7 @@ class B0_T(nn.Module):
         
         return super(B0_T, self).load_state_dict(new_state_dict, strict=strict)
 
-    def forward(self, image, depth):
+    def forward(self, image, depth,mask, ufzs):
         input_shape = image.shape[-2:]
 
         rgb_out, depth_out1 = self.down_sample_1(image, depth)
@@ -271,4 +271,4 @@ class B0_T(nn.Module):
              depth_out3,
              depth_out])
         rgb_out = F.interpolate(rgb_out, size=input_shape, mode='bilinear', align_corners=False)
-        return rgb_out
+        return rgb_out,1

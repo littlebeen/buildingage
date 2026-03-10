@@ -14,6 +14,8 @@ def get_year_type(arr_processed):
 class Amsterdam_dataset(torch.utils.data.Dataset):
     def __init__(self, mode,cache=False, augmentation=True):
         super(Amsterdam_dataset, self).__init__()
+        if mode=='val':
+            mode = 'test'
         MAIN_FOLDER = '../dataset/Amsterdam/'+mode+'/'
         DATA_FOLDER = MAIN_FOLDER + 'image/*.tiff'
         LABEL_FOLDER = MAIN_FOLDER + 'age/*.tiff' 
