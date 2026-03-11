@@ -8,12 +8,11 @@ from IPython.display import clear_output
 from config import convert_to_color, mse_rmse, DATASET,save_img,metrics,metrics_sinple,WeightedOrdinalLoss,accuracy,loss_calc,N_CLASSES,WINDOW_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL
 from dataset import get_dataloader
 import os
-from kmean import extract_building_features
+from kmean import generate_image
 print(MODEL + ', ' + MODE + ', ' + DATASET + ', ' + LOSS)
 main_dir = './result/{}_{}'.format(MODEL, DATASET)
 
 if not os.path.exists(main_dir):
-    # os.makedirs()：创建文件夹，支持创建多级嵌套目录（如 "a/b/c/d"）
     os.makedirs(main_dir)
 
 if MODEL == 'Dino':
@@ -130,10 +129,10 @@ def test(net, first=False,loader = val_loader):
     all_build=[]
     all_build_year=[]
     correct_build=[]
-    file_list=[]
-    file_list2=[]
-    # Switch the network to inference mode
     j=0
+    mask_list = []
+    feature_list = []
+    labels = []
     with torch.no_grad():
         for batch_idx, (data, mask, height,ufzs, target,boundary, label_year) in enumerate(loader):
             data, mask,height,ufzs, target,boundary, label_year = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda()), Variable(label_year.cuda())
@@ -150,6 +149,11 @@ def test(net, first=False,loader = val_loader):
             # all_build.append(instanc_class[0].cpu().numpy())
             # correct_build.append(instance_indices.cpu().numpy())
             # assert len(instanc_class[0])==len(instance_indices)
+
+            mask_list.append(boundary.cpu())
+            feature_list.append(output[1].cpu())
+            labels.append(target.cpu())
+
             valid_mask = target != -1
             target = target[valid_mask]
             class_indices = class_indices[valid_mask]
@@ -200,6 +204,8 @@ def test(net, first=False,loader = val_loader):
                             np.concatenate([p for p in all_build]))
         mse_rmse(np.concatenate([p for p in correct_build]),
                             np.concatenate([p for p in all_build_year]))
+        #generate_image(mask_list, feature_list,labels)
+
         # unique_vals, val_counts = np.unique(np.concatenate([p.ravel() for p in all_gts]), return_counts=True)
         # print("="*50)
         # print(f"mask数组共包含 {len(unique_vals)} 种唯一值")
@@ -286,8 +292,6 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
     iter_ = 0
     MIoU_best = 0.15
     criterionor = WeightedOrdinalLoss(num_classes = N_CLASSES)
-    mask_list = []
-    feature_list = []
     for e in range(1, epochs + 1):
         if e == 1:
             test_function(net, first=True)
@@ -298,8 +302,6 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
             data,height,ufzs, target,boundary = Variable(data.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda())
             optimizer.zero_grad()
             output = net(data, height, boundary, ufzs)
-            # mask_list.append(mask.cpu())
-            # feature_list.append(output[1].cpu())
             if LOSS == 'SEG':
                 loss_ce = loss_calc(output, target,boundary, weights)
                 loss = loss_ce
@@ -307,7 +309,6 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
                 loss_ordinal = criterionor(output, target)
                 loss = loss_ordinal
             loss.backward()
-            #grad_norm = torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
             optimizer.step()
 
             losses[iter_] = loss.data
@@ -324,7 +325,6 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
             iter_ += 1
 
             del (data, target, loss)
-        # extract_building_features(mask_list, feature_list)
         if e % save_epoch == 0:
             # We validate with the largest possible stride for faster computing
             MIoU = test_function(net)

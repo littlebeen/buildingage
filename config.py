@@ -14,7 +14,8 @@ from torch.nn.modules.loss import _Loss, _WeightedLoss
 
 
 DATASET = 'hongkong' #amsterdam hongkong global_hongkong
-MODEL = 'STunet' #Dino FTransUNet Unetformer STunet
+MODEL = 'Dino' #Dino FTransUNet Unetformer STunet AsymFormer CMTFNet ABCNet CMX CMNeXt MFNet Segformer
+#FTransUNet STunet 太慢了
 MODE = 'train'
 
 # Parameters
