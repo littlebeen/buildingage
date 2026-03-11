@@ -222,7 +222,7 @@ class CMNeXt(nn.Module):
    
         if self.num_modals > 0:
             self.extra_downsample_layers = nn.ModuleList([
-                PatchEmbedParallel(3, embed_dims[0], 7, 4, 7//2, self.num_modals),
+                PatchEmbedParallel(1, embed_dims[0], 7, 4, 7//2, self.num_modals),
                 *[PatchEmbedParallel(embed_dims[i], embed_dims[i+1], 3, 2, 3//2, self.num_modals) for i in range(3)]
             ])
         if self.num_modals > 1:

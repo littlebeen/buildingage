@@ -530,7 +530,7 @@ class UNetFormer(nn.Module):
 
     def forward(self, x, y, mask, ufzs):
         h, w = x.size()[-2:]
-        y = torch.unsqueeze(y, dim=1).repeat(1,3,1,1)
+        y = y.repeat(1,3,1,1)
         deepx, deepy = self.image_encoder(x, y) # 256*16*16
 
         # res1 = self.fpn1x(deepx)

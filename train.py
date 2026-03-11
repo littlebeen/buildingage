@@ -37,6 +37,15 @@ if MODEL == 'CMTFNet':
 if MODEL == 'ABCNet':
     from model.ABCNet.ABCNet import ABCNet
     net = ABCNet(num_classes=N_CLASSES).cuda()
+if MODEL == 'CMX':
+    from model.CMX.builder import EncoderDecoder
+    net = EncoderDecoder(num_classes=N_CLASSES).cuda()
+if MODEL == 'CMNeXt':
+    from model.CMNeXt.cmnext import CMNeXt
+    net = CMNeXt(num_classes=N_CLASSES).cuda()
+if MODEL == 'MFNet':
+    from model.MFNet.UNetFormer_MMSAM import UNetFormer
+    net = UNetFormer(num_classes=N_CLASSES).cuda()
 
 params = 0
 for name, param in net.named_parameters():
@@ -52,9 +61,10 @@ val_loader = torch.utils.data.DataLoader(val_set,batch_size=1)
 print("training : ", len(train_set))
 print("val : ", len(val_set))
 
-base_lr = 0.01
+base_lr = 0.001
 params_dict = dict(net.named_parameters())
 params = []
+print('lr: ', base_lr)
 for key, value in params_dict.items():
     if '_D' in key:
         # Decoder weights are trained at the nominal learning rate
