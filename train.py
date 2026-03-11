@@ -46,6 +46,9 @@ if MODEL == 'CMNeXt':
 if MODEL == 'MFNet':
     from model.MFNet.UNetFormer_MMSAM import UNetFormer
     net = UNetFormer(num_classes=N_CLASSES).cuda()
+if MODEL == 'Segformer':
+    from model.Segformer.segformer import SegFormer
+    net = SegFormer(num_classes=N_CLASSES).cuda()
 
 params = 0
 for name, param in net.named_parameters():
@@ -61,7 +64,7 @@ val_loader = torch.utils.data.DataLoader(val_set,batch_size=1)
 print("training : ", len(train_set))
 print("val : ", len(val_set))
 
-base_lr = 0.001
+base_lr = 0.01
 params_dict = dict(net.named_parameters())
 params = []
 print('lr: ', base_lr)

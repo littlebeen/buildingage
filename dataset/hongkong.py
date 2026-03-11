@@ -194,13 +194,12 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         boundary = boundary.astype(np.int64)
         zero_mask = (label_id == 0)
         boundary[zero_mask] = 0
-        instance, instance_num = generate_instance_mask(boundary)
-        boundary = boundary[np.newaxis, :, :]
+        boundary, instance_num = generate_instance_mask(boundary)
 
 
-        instance = instance-1 #整张图的instance mask 从-1开始
-        instances = extract_instance_masks(instance) #转换为instance mask
-        label_id[instance == -1] = 0
+        boundary = boundary-1 #整张图的instance mask 从-1开始
+        instances = extract_instance_masks(boundary) #转换为instance mask
+        label_id[boundary == -1] = 0
         # instances_class=get_mask_classes(instances,label_id) #获得所有instance
         # random_int = random.randint(0, len(instances)-1)
         # one_instances =instances[random_int]
@@ -212,7 +211,7 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         # Data augmentation
         if self.mode == 'train' and self.augmentation:
             #data, one_instances, boundary, height, label,instance, ufzs[0],ufzs[1], ufzs[2], ufzs[3] = self.data_augmentation(data, one_instances,boundary, height, label,instance,ufzs[0],ufzs[1], ufzs[2], ufzs[3])
-            data, boundary, height,label,instance,label_id = self.data_augmentation(data,boundary, height, label,instance,label_id)
+            data, boundary, height,label,label_id = self.data_augmentation(data,boundary, height, label,label_id)
         # ufzs = np.stack(ufzs, axis=0)
         # ufzs = generate_first_impervious_year(ufzs).astype(np.float32)
 
@@ -224,7 +223,6 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         # convert_to_color(label-1, main_dir='.', name='instance_{}'.format(i))
         # if random.random() < 0.5:
         #     height[:]=0
-        instances = np.array(instances)  
         if self.mode == 'train':
             return (torch.from_numpy(data),
                     torch.from_numpy(data), #无用之前是instances表示每一个instance 的mask，但train里面没有用到，先放data占位
@@ -233,9 +231,10 @@ class Hongkong_dataset(torch.utils.data.Dataset):
                     torch.from_numpy(data),
                     torch.from_numpy(label_id)-1,
                     torch.from_numpy(boundary),
-                    torch.from_numpy(label)
+                    torch.from_numpy(label) #具体的年份，train的时候无用
                     )
         else:
+            instances = np.array(instances)  
             return (torch.from_numpy(data),
                     torch.from_numpy(instances),
                     torch.from_numpy(height),
