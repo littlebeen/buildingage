@@ -1,15 +1,12 @@
 import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
-from semseg.models.layers import DropPath
+from ..layers import DropPath
 import functools
 from functools import partial
-from fvcore.nn import flop_count_table, FlopCountAnalysis
-from semseg.models.modules.ffm import FeatureFusionModule as FFM
-from semseg.models.modules.ffm import FeatureRectifyModule as FRM
-from semseg.models.modules.ffm import ChannelEmbed
-from semseg.models.modules.mspa import MSPABlock
-from semseg.utils.utils import nchw_to_nlc, nlc_to_nchw
+from ..modules.ffm import FeatureFusionModule as FFM
+from ..modules.ffm import FeatureRectifyModule as FRM
+from ..modules.mspa import MSPABlock
 
 
 class Attention(nn.Module):

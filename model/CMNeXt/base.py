@@ -1,9 +1,9 @@
 import torch
 import math
 from torch import nn
-from .backbones import *
 from .layers import trunc_normal_
 from collections import OrderedDict
+from .backbones import *
 
 def load_dualpath_model(model, model_file):
     # load raw state_dict

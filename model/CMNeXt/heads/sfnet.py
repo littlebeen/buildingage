@@ -1,8 +1,8 @@
 import torch
 from torch import nn, Tensor
 from torch.nn import functional as F
-from semseg.models.layers import ConvModule
-from semseg.models.modules import PPM
+from ..layers import ConvModule
+from ..modules import PPM
 
 
 class AlignedModule(nn.Module):
