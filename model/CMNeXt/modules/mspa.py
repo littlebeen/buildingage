@@ -1,107 +1,7 @@
-import inspect
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.autograd
 from timm.models.layers import DropPath
-from fvcore.nn import flop_count_table, FlopCountAnalysis
-# from mmcv.cnn import build_norm_layer
-
-
-def infer_abbr(class_type):
-    """Infer abbreviation from the class name.
-
-    When we build a norm layer with `build_norm_layer()`, we want to preserve
-    the norm type in variable names, e.g, self.bn1, self.gn. This method will
-    infer the abbreviation to map class types to abbreviations.
-
-    Rule 1: If the class has the property "_abbr_", return the property.
-    Rule 2: If the parent class is _BatchNorm, GroupNorm, LayerNorm or
-    InstanceNorm, the abbreviation of this layer will be "bn", "gn", "ln" and
-    "in" respectively.
-    Rule 3: If the class name contains "batch", "group", "layer" or "instance",
-    the abbreviation of this layer will be "bn", "gn", "ln" and "in"
-    respectively.
-    Rule 4: Otherwise, the abbreviation falls back to "norm".
-
-    Args:
-        class_type (type): The norm layer type.
-
-    Returns:
-        str: The inferred abbreviation.
-    """
-    if not inspect.isclass(class_type):
-        raise TypeError(
-            f'class_type must be a type, but got {type(class_type)}')
-    if hasattr(class_type, '_abbr_'):
-        return class_type._abbr_
-    elif issubclass(class_type, nn.GroupNorm):
-        return 'gn'
-    elif issubclass(class_type, nn.LayerNorm):
-        return 'ln'
-    else:
-        class_name = class_type.__name__.lower()
-        if 'batch' in class_name:
-            return 'bn'
-        elif 'group' in class_name:
-            return 'gn'
-        elif 'layer' in class_name:
-            return 'ln'
-        elif 'instance' in class_name:
-            return 'in'
-        else:
-            return 'norm_layer'
-
-def build_norm_layer(cfg,
-                     num_features: int,
-                     postfix):
-    """Build normalization layer.
-
-    Args:
-        cfg (dict): The norm layer config, which should contain:
-
-            - type (str): Layer type.
-            - layer args: Args needed to instantiate a norm layer.
-            - requires_grad (bool, optional): Whether stop gradient updates.
-        num_features (int): Number of input channels.
-        postfix (int | str): The postfix to be appended into norm abbreviation
-            to create named layer.
-
-    Returns:
-        tuple[str, nn.Module]: The first element is the layer name consisting
-        of abbreviation and postfix, e.g., bn1, gn. The second element is the
-        created norm layer.
-    """
-    if not isinstance(cfg, dict):
-        raise TypeError('cfg must be a dict')
-    if 'type' not in cfg:
-        raise KeyError('the cfg dict must contain the key "type"')
-    cfg_ = cfg.copy()
-
-    layer_type = cfg_.pop('type')
-
-    if inspect.isclass(layer_type):
-        norm_layer = layer_type
-    abbr = infer_abbr(norm_layer)
-
-    assert isinstance(postfix, (int, str))
-    name = abbr + str(postfix)
-
-    requires_grad = cfg_.pop('requires_grad', True)
-    cfg_.setdefault('eps', 1e-5)
-    if norm_layer is not nn.GroupNorm:
-        layer = norm_layer(num_features, **cfg_)
-        if layer_type == 'SyncBN' and hasattr(layer, '_specify_ddp_gpu_num'):
-            layer._specify_ddp_gpu_num(1)
-    else:
-        assert 'num_groups' in cfg_
-        layer = norm_layer(num_channels=num_features, **cfg_)
-
-    for param in layer.parameters():
-        param.requires_grad = requires_grad
-
-    return name, layer
 
 
 class DWConv(nn.Module):
@@ -158,10 +58,10 @@ class MSPoolAttention(nn.Module):
 class MSPABlock(nn.Module):
     def __init__(self, dim, mlp_ratio=4., drop=0., drop_path=0., act_layer=nn.GELU, norm_cfg=dict(type='BN', requires_grad=True)):
         super().__init__()
-        self.norm1 = build_norm_layer(norm_cfg, dim)[1]
+        self.norm1 = nn.BatchNorm2d(dim) 
         self.attn = MSPoolAttention(dim)
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
-        self.norm2 = build_norm_layer(norm_cfg, dim)[1]
+        self.norm2 = nn.BatchNorm2d(dim) 
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop)
         layer_scale_init_value = 1e-2

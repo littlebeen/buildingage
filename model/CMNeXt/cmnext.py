@@ -6,17 +6,20 @@ from .heads import SegFormerHead
 
 
 class CMNeXt(BaseModel):
-    def __init__(self, backbone: str = 'CMNeXt-B0', num_classes: int = 25, modals: list = ['img', 'depth']) -> None:
+    def __init__(self, backbone: str = 'CMNeXt-B2', num_classes: int = 25, modals: list = ['img', 'depth']) -> None:
         super().__init__(backbone, num_classes, modals)
         self.decode_head = SegFormerHead(self.backbone.channels, 256 if 'B0' in backbone or 'B1' in backbone else 512, num_classes)
         self.apply(self._init_weights)
         self.init_pretrained('./weights/segformer_mit_b2.pth')
 
-    def forward(self, x: list) -> list:
-        y = self.backbone(x)
+    def forward(self, x: list, height, mask, ufzs) -> list:
+        p = []
+        p.append(x)
+        p.append(height)
+        y = self.backbone(p)
         y = self.decode_head(y)
-        y = F.interpolate(y, size=x[0].shape[2:], mode='bilinear', align_corners=False)
-        return y
+        y = F.interpolate(y, size=p[0].shape[2:], mode='bilinear', align_corners=False)
+        return y,1
 
     def init_pretrained(self, pretrained: str = None) -> None:
         if pretrained:

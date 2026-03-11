@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
-
+from .resnet import resnet101,resnet50
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
 class Norm2d(nn.Module):
@@ -400,6 +400,38 @@ class DINOv3(nn.Module):
             )
         return all_layers
 
+class SqueezeAndExciteFusionAdd(nn.Module):
+    def __init__(self, channels_in, activation=nn.ReLU(inplace=True)):
+        super(SqueezeAndExciteFusionAdd, self).__init__()
+
+        self.se_rgb = SqueezeAndExcitation(channels_in,
+                                           activation=activation)
+        self.se_depth = SqueezeAndExcitation(channels_in,
+                                             activation=activation)
+
+    def forward(self, rgb, depth):
+        rgb = self.se_rgb(rgb)
+        depth = self.se_depth(depth)
+        out = rgb + depth
+        return out
+    
+class SqueezeAndExcitation(nn.Module):
+    def __init__(self, channel,
+                 reduction=16, activation=nn.ReLU(inplace=True)):
+        super(SqueezeAndExcitation, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Conv2d(channel, channel // reduction, kernel_size=1),
+            activation,
+            nn.Conv2d(channel // reduction, channel, kernel_size=1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        weighting = F.adaptive_avg_pool2d(x, 1)
+        weighting = self.fc(weighting)
+        y = x * weighting
+        return y
+        
 
 class UNetFormer(nn.Module):
     def __init__(self,
@@ -449,17 +481,29 @@ class UNetFormer(nn.Module):
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
 
         self.decoder = Decoder(encoder_channels, decode_channels, dropout, window_size, num_classes)
+        self.deep_encoder =resnet50(in_channels=1)
+        self.se_layer0 = SqueezeAndExciteFusionAdd(
+            1024, activation=nn.ReLU(inplace=True))
+        self.se_layer1 = SqueezeAndExciteFusionAdd(
+            256, activation=nn.ReLU(inplace=True))
+
 
     def forward(self, x, depth, mask,ufzs):
         b, _, h, w = x.size()
+        depth_feature = self.deep_encoder(depth)
         deepx = self.image_encoder(x)  # 256*1024  
         deepx = deepx[0].permute(0, 2, 1).view(b, 1024, 32, 32)
+        #deepx= self.se_layer0(deepx, depth_feature[3])
         ## 这个deepx可由interaction_indexes这个控制，配了一个UNetformer的解码器，自行修改
         deepx = self.neck(deepx)
-        res1 = self.fpn1(deepx)
-        res2 = self.fpn2(deepx)
-        res3 = self.fpn3(deepx)
-        res4 = self.fpn4(deepx)
+        res1 = self.fpn1(deepx) #256*128*128
+
+        res1= self.se_layer1(res1, depth_feature[1])
+
+
+        res2 = self.fpn2(deepx) #256 64
+        res3 = self.fpn3(deepx) #235 32
+        res4 = self.fpn4(deepx) #256 16
         x_piexl,feat_map = self.decoder(res1, res2, res3, res4, h, w)
         # 遍历该图的所有mask
 

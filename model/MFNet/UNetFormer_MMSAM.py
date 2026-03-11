@@ -4,12 +4,10 @@ import torch.nn.functional as F
 from einops import rearrange, repeat
 import numpy as np
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
-import timm
 import cv2
 import torch.autograd as autograd
-from MedSAM.models.sam import sam_model_registry
-import MedSAM.cfg as cfg
-import matplotlib.pyplot as plt
+from .MedSAM.models.sam import sam_model_registry
+from .MedSAM import cfg as cfg
 
 class Norm2d(nn.Module):
     def __init__(self, embed_dim):
@@ -530,7 +528,7 @@ class UNetFormer(nn.Module):
         self.decoder = Decoder(encoder_channels, decode_channels, dropout, window_size, num_classes)
         # self.decoder = Decoder_single(encoder_channels, decode_channels, dropout, window_size, num_classes)
 
-    def forward(self, x, y, mode='Train'):
+    def forward(self, x, y, mask, ufzs):
         h, w = x.size()[-2:]
         y = torch.unsqueeze(y, dim=1).repeat(1,3,1,1)
         deepx, deepy = self.image_encoder(x, y) # 256*16*16
@@ -560,4 +558,4 @@ class UNetFormer(nn.Module):
         # res4 = deepx + deepy
         # x = self.decoder(res4, h, w)
         
-        return x
+        return x,1
