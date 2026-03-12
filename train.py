@@ -19,7 +19,7 @@ if MODEL == 'Dino':
     from model.singleDino.singleDino_single_building import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'Dino2':
-    from model.singleDino.singleDino_single_building2 import UNetFormer as singleDino
+    from model.singleDino.singleDino_single_building_mask import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'FTransUNet':
     from model.ftransunet.FUNet import VisionTransformer
