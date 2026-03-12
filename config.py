@@ -265,7 +265,7 @@ def loss_calc_instance(pred, label,boundary, weights):
     loss = instance_loss
     return loss
 
-def loss_calc_only_instance(pred, label,boundary, weights):
+def loss_calc_only_instance(pred, label,boundary, weights=None):
     """
     This function returns cross entropy loss for semantic segmentation
     """

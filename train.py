@@ -133,6 +133,23 @@ def get_mask_number(pred_instance,masks):
         result[i] = torch.mode(instance)[0].item()
     return result
 
+def test_loss(net, first=False,loader = val_loader): #计算test取最大值的loss有多少，大约为1.16，需要配合改一下get_instance_metric的correct值才能跑
+    net.eval()
+    total_loss=0.
+    with torch.no_grad():
+        for batch_idx, (data, mask, height,ufzs, target,boundary, label_year) in enumerate(loader):
+            data, mask,height,ufzs, target,boundary, label_year = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda()), Variable(label_year.cuda())
+            output = net(data, height, boundary, ufzs)
+            instance_num,correct,all_building_year = get_instance_metric(output[0], mask[0],label_year, target)
+            correct = torch.stack(correct, dim=0).cuda()
+            new_output = []
+            new_output.append(correct)
+            new_output.append(correct)
+            loss = loss_calc_only_instance(new_output, target,boundary)
+            total_loss += loss.item()
+        total_loss /= len(loader)
+        print(test_loss)
+
 def test(net, first=False,loader = val_loader):
     net.eval()
     all_preds = []
@@ -336,7 +353,7 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
             losses[iter_] = loss.data
             mean_losses[iter_] = np.mean(losses[max(0, iter_ - 100):iter_])
 
-            if iter_ % 100 == 0:
+            if iter_ % 50 == 0:
                 clear_output()
                 pred = get_result(output[0])
                 pred = pred.data.cpu().numpy()[0]
