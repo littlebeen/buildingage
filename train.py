@@ -5,7 +5,7 @@ torch.cuda.device_count()
 import torch.optim as optim
 from torch.autograd import Variable
 from IPython.display import clear_output
-from config import convert_to_color, mse_rmse, DATASET,save_img,metrics,metrics_sinple,WeightedOrdinalLoss,accuracy,loss_calc,N_CLASSES,WINDOW_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL
+from config import convert_to_color, mse_rmse, DATASET,save_img,metrics,metrics_sinple,WeightedOrdinalLoss,accuracy,loss_calc,N_CLASSES,WINDOW_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL,loss_calc_instance
 from dataset import get_dataloader
 import os
 from kmean import generate_image
@@ -17,6 +17,9 @@ if not os.path.exists(main_dir):
 
 if MODEL == 'Dino':
     from model.singleDino.singleDino_single_building import UNetFormer as singleDino
+    net = singleDino(num_classes=N_CLASSES).cuda()
+if MODEL == 'Dino2':
+    from model.singleDino.singleDino_single_building2 import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'FTransUNet':
     from model.ftransunet.FUNet import VisionTransformer
@@ -146,6 +149,8 @@ def test(net, first=False,loader = val_loader):
                     # save_img(data[item], main_dir, name = "img_{}".format(item))
                     # save_img(height[item], main_dir, name = "height_{}".format(item))
             instance_num,correct,all_building_year = get_instance_metric(output[0], mask[0],label_year, target)
+            #correct = get_result(output[1]).cpu()
+
             # all_build.append(instanc_class[0].cpu().numpy())
             # correct_build.append(instance_indices.cpu().numpy())
             # assert len(instanc_class[0])==len(instance_indices)
@@ -173,7 +178,6 @@ def test(net, first=False,loader = val_loader):
             all_gts.append(target.cpu().numpy())
             all_build.append(instance_num)
             all_build_year.append(all_building_year)
-
             correct_build.append(correct)
 
             # accuracy = metrics_sinple(np.concatenate([p.ravel() for p in time_pred]),
@@ -308,6 +312,8 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
             if LOSS == 'ORD':
                 loss_ordinal = criterionor(output, target)
                 loss = loss_ordinal
+            if MODEL=='Dino2':
+                loss_ce = loss_calc_instance(output, target,boundary, weights)
             loss.backward()
             optimizer.step()
 

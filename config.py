@@ -14,7 +14,7 @@ from torch.nn.modules.loss import _Loss, _WeightedLoss
 
 
 DATASET = 'hongkong' #amsterdam hongkong global_hongkong
-MODEL = 'Dino' #Dino FTransUNet Unetformer STunet AsymFormer CMTFNet ABCNet CMX CMNeXt MFNet Segformer
+MODEL = 'Dino2' #Dino FTransUNet Unetformer STunet AsymFormer CMTFNet ABCNet CMX CMNeXt MFNet Segformer
 #FTransUNet STunet 太慢了
 MODE = 'train'
 
@@ -209,20 +209,20 @@ def fast_label_to_dist(one_hot_label):
     
     return label_dist
 
-def get_instance_metric(pred_instance, instance_label, label):
-    pred_instance= pred_instance[0].permute(0,2,3,1) # [1,H,W,C]
-    all_build=[]
-    correct_build=[]    
-    for j in range(pred_instance.shape[0]): #batch size
-        instance_label_i = pred_instance[j][instance_label[j][0]]
-        mean_tensor = instance_label_i.mean(dim=0)
-        #pred_instance_label = torch.argmax(mean_tensor)
-        label_i = torch.mode(label[j][instance_label[j][0]])[0].item() # 该实例的真实类别
-        all_build.append(label_i)
-        correct_build.append(mean_tensor)
-    combined_tensor = torch.stack(correct_build, dim=1)
-    all_build = torch.tensor(all_build)
-    return (all_build,combined_tensor)
+
+def get_instance_label(labels,boundarys):
+    B,w,h = labels.shape
+    building_label = []
+    for b in range(B):
+        boundary = boundarys[b, :, :] 
+        building_ids = torch.unique(boundary)
+        building_ids = [id for id in building_ids if id != -1]
+        for bid in building_ids:
+            mask_bid = torch.where(boundary == bid)
+            label_i = torch.mode(labels[b][mask_bid])[0].item() 
+            building_label.append(label_i)
+    combined_tensor = torch.tensor(building_label).cuda()
+    return combined_tensor
 
 def loss_calc(pred, label,boundary, weights):
     """
@@ -249,6 +249,22 @@ def loss_calc(pred, label,boundary, weights):
     # label = fast_label_to_dist(one_hot_label)
     # label = pdf_fn(label)
     # return manual_cross_entropy_with_soft_label(pred, label, dim=1)
+
+
+def loss_calc_instance(pred, label,boundary, weights):
+    """
+    This function returns cross entropy loss for semantic segmentation
+    """
+    # out shape batch_size x channels x h x w -> batch_size x channels x h x w
+    # label shape h x w x 1 x batch_size  -> batch_size x 1 x h x w
+    label= Variable(label.long()).cuda()
+    criterion_piexl = CrossEntropy2d_ignore().cuda()
+    piexl_loss = criterion_piexl(pred[0],label,weights)
+    instanc_class = get_instance_label(label,boundary)
+    instance_loss = CrossEntropy2d(pred[1],instanc_class)
+   
+    loss = piexl_loss+instance_loss
+    return loss
 
 def CrossEntropy2d(input, target, weight=None, size_average=True):
     """ 2D version of the cross entropy loss """
