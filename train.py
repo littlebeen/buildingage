@@ -51,6 +51,9 @@ if MODEL == 'MFNet':
 if MODEL == 'Segformer':
     from model.Segformer.segformer import SegFormer
     net = SegFormer(num_classes=N_CLASSES).cuda()
+if MODEL == 'TransUNet':
+    from model.TransUNet.vit_seg_modeling import VisionTransformer
+    net = VisionTransformer(num_classes=N_CLASSES).cuda()
 
 params = 0
 for name, param in net.named_parameters():
@@ -66,7 +69,7 @@ val_loader = torch.utils.data.DataLoader(val_set,batch_size=1)
 print("training : ", len(train_set))
 print("val : ", len(val_set))
 
-base_lr = 0.01
+base_lr = 0.005
 params_dict = dict(net.named_parameters())
 params = []
 print('lr: ', base_lr)
@@ -149,15 +152,11 @@ def test(net, first=False,loader = val_loader):
                     # save_img(data[item], main_dir, name = "img_{}".format(item))
                     # save_img(height[item], main_dir, name = "height_{}".format(item))
             instance_num,correct,all_building_year = get_instance_metric(output[0], mask[0],label_year, target)
-            #correct = get_result(output[1]).cpu()
+            correct = get_result(output[1]).cpu()
 
-            # all_build.append(instanc_class[0].cpu().numpy())
-            # correct_build.append(instance_indices.cpu().numpy())
-            # assert len(instanc_class[0])==len(instance_indices)
-
-            mask_list.append(boundary.cpu())
-            feature_list.append(output[1].cpu())
-            labels.append(target.cpu())
+            # mask_list.append(boundary.cpu())
+            # feature_list.append(output[1].cpu())
+            # labels.append(target.cpu())
 
             valid_mask = target != -1
             target = target[valid_mask]
@@ -307,13 +306,14 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
             optimizer.zero_grad()
             output = net(data, height, boundary, ufzs)
             if LOSS == 'SEG':
-                loss_ce = loss_calc(output, target,boundary, weights)
+                if MODEL=='Dino2':
+                    loss_ce = loss_calc_instance(output, target,boundary, weights)
+                else:
+                    loss_ce = loss_calc(output, target,boundary, weights)
                 loss = loss_ce
             if LOSS == 'ORD':
                 loss_ordinal = criterionor(output, target)
                 loss = loss_ordinal
-            if MODEL=='Dino2':
-                loss_ce = loss_calc_instance(output, target,boundary, weights)
             loss.backward()
             optimizer.step()
 
@@ -342,6 +342,7 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
 test_function = test_semantic if DATASET=='amsterdam' else test
 
 if MODE == 'train':
+    net.load_state_dict(torch.load('./Dino_epoch42_0.4564934817950233.pth'),strict=False) 
     train(net, optimizer, 70, test_function, scheduler)
 if MODE == 'test':
     net.load_state_dict(torch.load('./Dino_epoch42_0.4564934817950233.pth'),strict=True) 
