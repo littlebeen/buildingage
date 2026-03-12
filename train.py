@@ -5,7 +5,7 @@ torch.cuda.device_count()
 import torch.optim as optim
 from torch.autograd import Variable
 from IPython.display import clear_output
-from config import convert_to_color, mse_rmse, DATASET,save_img,metrics,metrics_sinple,WeightedOrdinalLoss,accuracy,loss_calc,N_CLASSES,WINDOW_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL,loss_calc_instance
+from config import convert_to_color, mse_rmse, DATASET,save_img,metrics,metrics_sinple,WeightedOrdinalLoss,accuracy,loss_calc,N_CLASSES,WINDOW_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL,loss_calc_instance,loss_calc_only_instance
 from dataset import get_dataloader
 import os
 from kmean import generate_image
@@ -66,10 +66,15 @@ train_loader = torch.utils.data.DataLoader(train_set,batch_size=10,shuffle=True)
 
 val_set = get_dataloader(DATASET, 'val')
 val_loader = torch.utils.data.DataLoader(val_set,batch_size=1)
+
+test_set = get_dataloader(DATASET, 'test')
+test_loader = torch.utils.data.DataLoader(test_set,batch_size=10)
 print("training : ", len(train_set))
 print("val : ", len(val_set))
+print("training : ", len(train_set))
+print("test : ", len(test_set))
 
-base_lr = 0.005
+base_lr = 0.0005
 params_dict = dict(net.named_parameters())
 params = []
 print('lr: ', base_lr)
@@ -152,7 +157,8 @@ def test(net, first=False,loader = val_loader):
                     # save_img(data[item], main_dir, name = "img_{}".format(item))
                     # save_img(height[item], main_dir, name = "height_{}".format(item))
             instance_num,correct,all_building_year = get_instance_metric(output[0], mask[0],label_year, target)
-            correct = get_result(output[1]).cpu()
+            if torch.is_tensor(output[1]):
+                correct = get_result(output[1]).cpu()
 
             # mask_list.append(boundary.cpu())
             # feature_list.append(output[1].cpu())
@@ -203,7 +209,7 @@ def test(net, first=False,loader = val_loader):
 
         accuracy = metrics(np.concatenate([p.ravel() for p in all_preds]),
                             np.concatenate([p.ravel() for p in all_gts]))
-        instance_accuracy = metrics_sinple(np.concatenate([p for p in correct_build]),
+        instance_accuracy = metrics(np.concatenate([p for p in correct_build]),
                             np.concatenate([p for p in all_build]))
         mse_rmse(np.concatenate([p for p in correct_build]),
                             np.concatenate([p for p in all_build_year]))
@@ -287,17 +293,25 @@ def test_all(net, loader = val_loader):
     return max_ids
 
 
-def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS, save_epoch=3):
+# 计算全模型梯度的总L2范数
+def get_total_grad_norm(model):
+    grad_norm = 0.0
+    for param in model.parameters():
+        if param.grad is not None:
+            grad_norm += torch.norm(param.grad) **2
+    grad_norm = torch.sqrt(grad_norm)
+    return grad_norm.item()
+
+def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS, save_epoch=1):
     losses = np.zeros(1000000)
     mean_losses = np.zeros(100000000)
     weights = weights.cuda()
 
     iter_ = 0
-    MIoU_best = 0.15
     criterionor = WeightedOrdinalLoss(num_classes = N_CLASSES)
     for e in range(1, epochs + 1):
-        if e == 1:
-            test_function(net, first=True)
+        # if e == 1:
+        #     test_function(net, first=True)
         if scheduler is not None:
             scheduler.step()
         net.train()
@@ -315,12 +329,14 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
                 loss_ordinal = criterionor(output, target)
                 loss = loss_ordinal
             loss.backward()
+            #total_grad_norm = get_total_grad_norm(net)
+            #print(f"\n全模型梯度总范数：{total_grad_norm:.4f}")
             optimizer.step()
 
             losses[iter_] = loss.data
             mean_losses[iter_] = np.mean(losses[max(0, iter_ - 100):iter_])
 
-            if iter_ % 50 == 0:
+            if iter_ % 100 == 0:
                 clear_output()
                 pred = get_result(output[0])
                 pred = pred.data.cpu().numpy()[0]
@@ -328,6 +344,17 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
                 print('Train (epoch {}/{}) [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tAccuracy: {}'.format(
                     e, epochs, batch_idx, len(train_loader),
                     100. * batch_idx / len(train_loader), mean_losses[iter_], accuracy(pred, gt)))
+                net.eval()
+                test_loss=0.
+                for batch_idx, (data, mask, height,ufzs, target,boundary,label_year) in enumerate(test_loader):
+                    data, mask,height,ufzs, target,boundary = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda())
+                    with torch.no_grad():
+                        output = net(data, height, boundary, ufzs)
+                        loss_ce = loss_calc_only_instance(output, target,boundary, weights)
+                        test_loss += loss.item()
+                test_loss /= len(test_loader)
+                print(test_loss)
+                net.train()
             iter_ += 1
 
             del (data, target, loss)
@@ -335,9 +362,7 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
             # We validate with the largest possible stride for faster computing
             MIoU = test_function(net)
             net.train()
-            if MIoU > MIoU_best:
-                torch.save(net.state_dict(), main_dir + '/{}_epoch{}_{}.pth'.format(MODEL, e, MIoU))
-                MIoU_best = MIoU
+            torch.save(net.state_dict(), main_dir + '/{}_epoch{}_{}.pth'.format(MODEL, e, MIoU))
 
 test_function = test_semantic if DATASET=='amsterdam' else test
 

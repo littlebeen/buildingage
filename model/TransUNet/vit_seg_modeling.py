@@ -376,7 +376,7 @@ class VisionTransformer(nn.Module):
         self.decoder = DecoderCup(config)
         self.segmentation_head = SegmentationHead(
             in_channels=config['decoder_channels'][-1],
-            out_channels=config['n_classes'],
+            out_channels=num_classes,
             kernel_size=3,
         )
         self.config = config
@@ -465,7 +465,7 @@ def get_b16_config():
 def get_r50_b16_config():
     """Returns the Resnet50 + ViT-B/16 configuration."""
     config = get_b16_config()
-    config.patches.grid = (16, 16)
+    config.patches.grid = (32, 32)
     config.resnet = ml_collections.ConfigDict()
     config.resnet.num_layers = (3, 4, 9)
     config.resnet.width_factor = 1

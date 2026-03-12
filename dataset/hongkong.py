@@ -107,7 +107,10 @@ def get_ufz_type(arr_processed):
 class Hongkong_dataset(torch.utils.data.Dataset):
     def __init__(self, mode,cache=False, augmentation=True):
         super(Hongkong_dataset, self).__init__()
-        MAIN_FOLDER = '../dataset/hk_building_age/'+mode+'/'
+        if mode=='test':
+            MAIN_FOLDER = '../dataset/hk_building_age/val/'
+        else:
+            MAIN_FOLDER = '../dataset/hk_building_age/'+mode+'/'
         DATA_FOLDER = MAIN_FOLDER + 'image/tdop*.tif'
         self.LABEL_FOLDER = MAIN_FOLDER + 'class/'
         self.BOUNDARY_FOLDER = MAIN_FOLDER + 'mask/'
@@ -118,6 +121,8 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         self.cache = cache
         self.max_num=0
         self.data_files = glob.glob(DATA_FOLDER)
+        if mode=='test':
+            self.data_files = random.sample(self.data_files, 100)
         # if mode == 'train':
         # # List of files
         #     #self.data_files = random.sample(glob.glob(DATA_FOLDER), 2075)
@@ -223,7 +228,7 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         # convert_to_color(label-1, main_dir='.', name='instance_{}'.format(i))
         # if random.random() < 0.5:
         #     height[:]=0
-        if self.mode == 'train':
+        if self.mode == 'train' or self.mode == 'test':
             return (torch.from_numpy(data),
                     torch.from_numpy(data), #无用之前是instances表示每一个instance 的mask，但train里面没有用到，先放data占位
                     torch.from_numpy(height),

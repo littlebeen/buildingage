@@ -14,8 +14,8 @@ from torch.nn.modules.loss import _Loss, _WeightedLoss
 
 
 DATASET = 'hongkong' #amsterdam hongkong global_hongkong
-MODEL = 'Dino2' #Dino FTransUNet Unetformer STunet AsymFormer CMTFNet ABCNet CMX CMNeXt MFNet Segformer
-#FTransUNet STunet 太慢了
+MODEL = 'Dino2' #Dino Dino2 Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet
+#FTransUNet STunet MFNet太慢了
 MODE = 'train'
 
 # Parameters
@@ -262,8 +262,19 @@ def loss_calc_instance(pred, label,boundary, weights):
     piexl_loss = criterion_piexl(pred[0],label,weights)
     instanc_class = get_instance_label(label,boundary)
     instance_loss = CrossEntropy2d(pred[1],instanc_class)
-   
-    loss = piexl_loss+instance_loss
+    loss = instance_loss
+    return loss
+
+def loss_calc_only_instance(pred, label,boundary, weights):
+    """
+    This function returns cross entropy loss for semantic segmentation
+    """
+    # out shape batch_size x channels x h x w -> batch_size x channels x h x w
+    # label shape h x w x 1 x batch_size  -> batch_size x 1 x h x w
+    label= Variable(label.long()).cuda()
+    instanc_class = get_instance_label(label,boundary)
+    instance_loss = CrossEntropy2d(pred[1],instanc_class)
+    loss = instance_loss
     return loss
 
 def CrossEntropy2d(input, target, weight=None, size_average=True):

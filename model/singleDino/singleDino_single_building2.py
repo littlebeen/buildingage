@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
+from .weak_select import WeaklySelector,GCNCombiner
 
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
@@ -446,11 +447,25 @@ class UNetFormer(nn.Module):
         self.fpn3 = nn.Identity()
         self.fpn4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-
         self.decoder = Decoder(encoder_channels, decode_channels, dropout, window_size, num_classes)
 
-    def forward(self, x, depth, mask,ufzs):
+        self.classifier =nn.Sequential( nn.BatchNorm1d(decode_channels),  # d是feat_map的通道数，添加BN稳定特征
+                            nn.Dropout(0.1),    # 轻微dropout，减少过拟合+数值波动
+                            nn.Linear(decode_channels, num_classes))
+        
+
+        # self.selector = WeaklySelector(outs, num_classes, num_selects, w_fpn_size=1536)
+        # num_selects = {
+        #         # match user-specified in return_nodes
+        #         "layer1": 2048,
+        #         "layer2": 512,
+        #         "layer3": 128,
+        #         "layer4": 32,
+        #     }
+        # total_num_selects = sum([num_selects[name] for name in num_selects]) 
+        # self.combiner = GCNCombiner(total_num_selects, num_classes, gcn_inputs=None, gcn_proj_size=None, fpn_size=1536)
+
+    def forward(self, x, depth, masks,ufzs):
         b, _, h, w = x.size()
         deepx = self.image_encoder(x)  # 256*1024  
         deepx = deepx[0].permute(0, 2, 1).view(b, 1024, 32, 32)
@@ -463,27 +478,55 @@ class UNetFormer(nn.Module):
         x_piexl,feat_map = self.decoder(res1, res2, res3, res4, h, w)
         # 遍历该图的所有mask
 
+        #feat_map = feat_map.detach()
+        B, d, W_feat, H_feat = feat_map.shape
+        buildings=[]
+        for b in range(B):
+            mask = masks[b, :, :] 
+            feature = feat_map[b, :, :, :]
+            building_ids = torch.unique(mask)
+            building_ids = [id for id in building_ids if id != -1]
+            for bid in building_ids:
+                mask_bid = (mask == bid).float()  # 生成当前建筑的二值mask
+                mask_bid = mask_bid.unsqueeze(0).unsqueeze(0)
+                mask_interp = nn.functional.interpolate(
+                    mask_bid, 
+                    size=(W_feat, H_feat),  # 对齐特征图尺寸
+                    mode='bilinear',        # 双线性插值（适合mask）
+                    align_corners=True     # 避免边缘失真，推荐设置
+                )
+                mask_interp = mask_interp.squeeze()
+                
+                feat_flat = feature.reshape(d, -1)  # (d, 128×128)
+                mask_flat = mask_interp.reshape(1, -1)  # (1, 128×128)
+                global_feat = torch.sum(feat_flat * mask_flat, dim=1) / torch.clamp(mask_flat.sum(), min=1e-6)
 
-        # _, d, W_feat, H_feat = feat_map.shape
-        # _,n,_,_ =mask.shape
-        # mask_float = mask.float()
-        # mask_interp = nn.functional.interpolate(
-        #     mask_float, 
-        #     size=(W_feat, H_feat),  # 对齐特征图尺寸
-        #     mode='bilinear',        # 双线性插值（适合mask）
-        #     align_corners=False     # 避免边缘失真，推荐设置
-        # )
-        # feat_map = feat_map.detach()
-        # mask_expand = mask_interp.unsqueeze(2)  # 维度变为 B×3×1×W×H
-        # feat_map_expand = feat_map.unsqueeze(1)  # 维度变为 B×1×d×W×H
-        # masked_feat = feat_map_expand * mask_expand  # 核心逻辑保留，仅维度适配
-        # masked_feat_flat = masked_feat.reshape(b*n, d, W_feat, H_feat)  # 展平mask通道和batch
-        # ins_feat_flat = self.avg_pool(masked_feat_flat).squeeze()  # (B×3)×d（squeeze后去掉1×1维度）
-        # logits_flat = self.classifier(ins_feat_flat)  # (B×3)×num_classes
-        # logits = logits_flat.reshape(b, n, -1)  # -1自动匹配num_classes
-        # logits = logits.squeeze()
 
-        return x_piexl, deepx
+                # h_coords, w_coords = torch.where(mask_interp == 1)
+                # global_features = feature[:, h_coords, w_coords]
+                # global_features = torch.mean(global_features, dim=1)
+                #features = self.fuse_feature(global_feature=global_features, local_feature=local_features)
+                global_feat = F.normalize(global_feat, p=2, dim=0)
+                buildings.append(global_feat)
+
+        combined_tensor = torch.stack(buildings, dim=0)
+        logits = self.classifier(combined_tensor)  # (B×3)×num_classes
+        logits_clamped = torch.clamp(logits, min=-10.0, max=10.0)
+            
+            # selects = self.selector(x, logits)
+            # comb_outs ,feature_outs = self.combiner(selects)
+            # logits['comb_outs'] = comb_outs
+        return x_piexl, logits_clamped #deepx
     
+    def fuse_feature(self, global_feature, local_feature=None):
+        """ fuse global feature with local feature
+        global feature: produced by backbone or PFI module
+        local feature: produced by local branch
+        """
+
+        ### addition
+        local_feature = self.local_proj_layer(local_feature)
+        feature = global_feature + 0.5 * local_feature
+        return feature
 
 
