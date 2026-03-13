@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.utils.model_zoo as model_zoo
 
+import torch.nn.functional as F
 
 def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
@@ -204,3 +205,30 @@ def resnet101(pretrained=False,in_channels=3, **kwargs):
     del model.avgpool
     del model.fc
     return model
+
+
+
+class DSMEncoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        
+        # 输出全部 256 通道，严格匹配你的 RGB FPN
+        self.conv1 = nn.Conv2d(1, 256, kernel_size=3, stride=2, padding=1)
+        self.conv2 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
+        self.conv3 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
+        self.conv4 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
+        
+        self.bn1 = nn.BatchNorm2d(256)
+        self.bn2 = nn.BatchNorm2d(256)
+        self.bn3 = nn.BatchNorm2d(256)
+        self.bn4 = nn.BatchNorm2d(256)
+
+    def forward(self, x):
+        # 输入 DSM：[B, 1, H, W]
+        x1 = F.relu(self.bn1(self.conv1(x)))  # 1/2  256 × 128 ×128
+        x2 = F.relu(self.bn2(self.conv2(x1))) # 1/4  256 × 64 ×64
+        x3 = F.relu(self.bn3(self.conv3(x2))) # 1/8 256 ×32×32
+        x4 = F.relu(self.bn4(self.conv3(x3))) # 1/16 256 ×16×16
+        
+        # 四个尺度，全部 256 通道，完美匹配你的 res1~res4
+        return [x1, x2, x3, x4]

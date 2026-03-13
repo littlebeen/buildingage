@@ -22,7 +22,7 @@ if MODEL == 'Dino_mask':
     from model.singleDino.singleDino_single_building_mask import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'Dino_height':
-    from model.singleDino.singleDino_single_building3 import UNetFormer as singleDino
+    from model.singleDino.singleDino_single_building_height import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'FTransUNet':
     from model.ftransunet.FUNet import VisionTransformer
@@ -333,6 +333,7 @@ def get_total_grad_norm(model):
         if param.grad is not None:
             grad_norm += torch.norm(param.grad) **2
     grad_norm = torch.sqrt(grad_norm)
+    print(f"\n全模型梯度总范数：{grad_norm.item():.4f}")
     return grad_norm.item()
 
 def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS, save_epoch=1):
@@ -343,8 +344,8 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
     iter_ = 0
     criterionor = WeightedOrdinalLoss(num_classes = N_CLASSES)
     for e in range(1, epochs + 1):
-        if e == 1:
-            test_function(net, first=True)
+        # if e == 1:
+        #     test_function(net, first=True)
         if scheduler is not None:
             scheduler.step()
         net.train()
@@ -355,7 +356,6 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
             loss = loss_calculate(output, target,boundary,e)
             loss.backward()
             #total_grad_norm = get_total_grad_norm(net)
-            #print(f"\n全模型梯度总范数：{total_grad_norm:.4f}")
             optimizer.step()
 
             losses[iter_] = loss.data
