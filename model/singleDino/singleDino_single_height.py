@@ -507,26 +507,6 @@ class UNetFormer(nn.Module):
         x_piexl,feat_map = self.decoder(res1, res2, res3, res4, h, w)
         # 遍历该图的所有mask
 
-
-        # _, d, W_feat, H_feat = feat_map.shape
-        # _,n,_,_ =mask.shape
-        # mask_float = mask.float()
-        # mask_interp = nn.functional.interpolate(
-        #     mask_float, 
-        #     size=(W_feat, H_feat),  # 对齐特征图尺寸
-        #     mode='bilinear',        # 双线性插值（适合mask）
-        #     align_corners=False     # 避免边缘失真，推荐设置
-        # )
-        # feat_map = feat_map.detach()
-        # mask_expand = mask_interp.unsqueeze(2)  # 维度变为 B×3×1×W×H
-        # feat_map_expand = feat_map.unsqueeze(1)  # 维度变为 B×1×d×W×H
-        # masked_feat = feat_map_expand * mask_expand  # 核心逻辑保留，仅维度适配
-        # masked_feat_flat = masked_feat.reshape(b*n, d, W_feat, H_feat)  # 展平mask通道和batch
-        # ins_feat_flat = self.avg_pool(masked_feat_flat).squeeze()  # (B×3)×d（squeeze后去掉1×1维度）
-        # logits_flat = self.classifier(ins_feat_flat)  # (B×3)×num_classes
-        # logits = logits_flat.reshape(b, n, -1)  # -1自动匹配num_classes
-        # logits = logits.squeeze()
-
         return x_piexl, feat_map
     
 

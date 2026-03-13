@@ -5,7 +5,7 @@ torch.cuda.device_count()
 import torch.optim as optim
 from torch.autograd import Variable
 from IPython.display import clear_output
-from config import convert_to_color, mse_rmse, DATASET,save_img,metrics,metrics_sinple,WeightedOrdinalLoss,accuracy,loss_calc,N_CLASSES,WINDOW_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL,loss_calc_instance,loss_calc_only_instance
+from config import convert_to_color, mse_rmse, DATASET,save_img,metrics,metrics_sinple,WeightedOrdinalLoss,accuracy,N_CLASSES,WINDOW_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL,loss_calc_only_instance,loss_calculate,NUM_INSTANCE
 from dataset import get_dataloader
 import os
 from kmean import generate_image
@@ -18,8 +18,11 @@ if not os.path.exists(main_dir):
 if MODEL == 'Dino':
     from model.singleDino.singleDino_single_building import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
-if MODEL == 'Dino2':
+if MODEL == 'Dino_mask':
     from model.singleDino.singleDino_single_building_mask import UNetFormer as singleDino
+    net = singleDino(num_classes=N_CLASSES).cuda()
+if MODEL == 'Dino_height':
+    from model.singleDino.singleDino_single_building3 import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'FTransUNet':
     from model.ftransunet.FUNet import VisionTransformer
@@ -74,7 +77,7 @@ print("val : ", len(val_set))
 print("training : ", len(train_set))
 print("test : ", len(test_set))
 
-base_lr = 0.0005
+base_lr = 0.005
 params_dict = dict(net.named_parameters())
 params = []
 print('lr: ', base_lr)
@@ -150,7 +153,20 @@ def test_loss(net, first=False,loader = val_loader): #计算test取最大值的l
         total_loss /= len(loader)
         print(test_loss)
 
-def test(net, first=False,loader = val_loader):
+def test_loss_train(net,loader = test_loader):
+    net.eval()
+    test_loss=0.
+    for batch_idx, (data, mask, height,ufzs, target,boundary,label_year) in enumerate(loader):
+        data, mask,height,ufzs, target,boundary = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda())
+        with torch.no_grad():
+            output = net(data, height, boundary, ufzs)
+            loss_ce = loss_calc_only_instance(output, target,boundary, weights=None)
+            test_loss += loss_ce.item()
+    test_loss /= len(loader)
+    print(test_loss)
+    net.train()
+
+def test(net, first=False,loader = val_loader,epoch=100):
     net.eval()
     all_preds = []
     all_gts = []
@@ -174,7 +190,7 @@ def test(net, first=False,loader = val_loader):
                     # save_img(data[item], main_dir, name = "img_{}".format(item))
                     # save_img(height[item], main_dir, name = "height_{}".format(item))
             instance_num,correct,all_building_year = get_instance_metric(output[0], mask[0],label_year, target)
-            if torch.is_tensor(output[1]):
+            if torch.is_tensor(output[1]) and epoch>NUM_INSTANCE:
                 correct = get_result(output[1]).cpu()
 
             # mask_list.append(boundary.cpu())
@@ -250,7 +266,7 @@ def test(net, first=False,loader = val_loader):
         # print("="*50)
         return accuracy
 
-def test_semantic(net,first=False, loader = val_loader):
+def test_semantic(net,first=False, loader = val_loader,epoch=100):
     net.eval()
     all_preds = []
     all_gts = []
@@ -327,8 +343,8 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
     iter_ = 0
     criterionor = WeightedOrdinalLoss(num_classes = N_CLASSES)
     for e in range(1, epochs + 1):
-        # if e == 1:
-        #     test_function(net, first=True)
+        if e == 1:
+            test_function(net, first=True)
         if scheduler is not None:
             scheduler.step()
         net.train()
@@ -336,15 +352,7 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
             data,height,ufzs, target,boundary = Variable(data.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda())
             optimizer.zero_grad()
             output = net(data, height, boundary, ufzs)
-            if LOSS == 'SEG':
-                if MODEL=='Dino2':
-                    loss_ce = loss_calc_instance(output, target,boundary, weights)
-                else:
-                    loss_ce = loss_calc(output, target,boundary, weights)
-                loss = loss_ce
-            if LOSS == 'ORD':
-                loss_ordinal = criterionor(output, target)
-                loss = loss_ordinal
+            loss = loss_calculate(output, target,boundary,e)
             loss.backward()
             #total_grad_norm = get_total_grad_norm(net)
             #print(f"\n全模型梯度总范数：{total_grad_norm:.4f}")
@@ -361,30 +369,19 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
                 print('Train (epoch {}/{}) [{}/{} ({:.0f}%)]\tLoss: {:.6f}\tAccuracy: {}'.format(
                     e, epochs, batch_idx, len(train_loader),
                     100. * batch_idx / len(train_loader), mean_losses[iter_], accuracy(pred, gt)))
-                net.eval()
-                test_loss=0.
-                for batch_idx, (data, mask, height,ufzs, target,boundary,label_year) in enumerate(test_loader):
-                    data, mask,height,ufzs, target,boundary = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda())
-                    with torch.no_grad():
-                        output = net(data, height, boundary, ufzs)
-                        loss_ce = loss_calc_only_instance(output, target,boundary, weights)
-                        test_loss += loss.item()
-                test_loss /= len(test_loader)
-                print(test_loss)
-                net.train()
             iter_ += 1
 
             del (data, target, loss)
         if e % save_epoch == 0:
             # We validate with the largest possible stride for faster computing
-            MIoU = test_function(net)
+            MIoU = test_function(net,epoch=e)
             net.train()
             torch.save(net.state_dict(), main_dir + '/{}_epoch{}_{}.pth'.format(MODEL, e, MIoU))
 
 test_function = test_semantic if DATASET=='amsterdam' else test
 
 if MODE == 'train':
-    net.load_state_dict(torch.load('./Dino_epoch42_0.4564934817950233.pth'),strict=False) 
+    # net.load_state_dict(torch.load('./Dino_epoch42_0.4564934817950233.pth'),strict=False) 
     train(net, optimizer, 70, test_function, scheduler)
 if MODE == 'test':
     net.load_state_dict(torch.load('./Dino_epoch42_0.4564934817950233.pth'),strict=True) 

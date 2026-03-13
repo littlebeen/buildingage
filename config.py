@@ -13,8 +13,8 @@ import os
 from torch.nn.modules.loss import _Loss, _WeightedLoss
 
 
-DATASET = 'hongkong' #amsterdam hongkong global_hongkong
-MODEL = 'Dino2' #Dino Dino2 Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet
+DATASET = 'amsterdam' #amsterdam hongkong global_hongkong
+MODEL = 'TransUNet' #Dino Dino_mask Dino_height Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet
 #FTransUNet STunet MFNet太慢了
 MODE = 'train'
 
@@ -37,6 +37,7 @@ N_CLASSES = len(LABELS) # Number of classes
 WEIGHTS = torch.ones(N_CLASSES) # Weights for class balancing
 WEIGHTS[0] = 0.3
 CACHE = True # Store the dataset in-memory
+NUM_INSTANCE=37
 
 # ISPRS color palette
 # Let's define the standard ISPRS color palette
@@ -224,6 +225,16 @@ def get_instance_label(labels,boundarys):
     combined_tensor = torch.tensor(building_label).cuda()
     return combined_tensor
 
+def loss_calculate(output,target,boundary,epoch):
+    if 'Dino' in MODEL:
+        if epoch<NUM_INSTANCE:
+            loss_ce = loss_calc(output, target,boundary, WEIGHTS)
+        else:
+            loss_ce = loss_calc_instance(output, target,boundary, WEIGHTS)
+    else:
+        loss_ce = loss_calc(output, target,boundary, WEIGHTS)
+    return loss_ce
+
 def loss_calc(pred, label,boundary, weights):
     """
     This function returns cross entropy loss for semantic segmentation
@@ -231,12 +242,8 @@ def loss_calc(pred, label,boundary, weights):
     # out shape batch_size x channels x h x w -> batch_size x channels x h x w
     # label shape h x w x 1 x batch_size  -> batch_size x 1 x h x w
     label= Variable(label.long()).cuda()
-    #instanc_class = Variable(instanc_class.long()).cuda()
     criterion_piexl = CrossEntropy2d_ignore().cuda()
     piexl_loss = criterion_piexl(pred[0],label,weights)
-    #isinstance_loss = get_instance_metric(pred,mask,label)
-    # instance_loss = CrossEntropy2d(pred[1],instanc_class)
-    #background_loss = F.binary_cross_entropy_with_logits(pred[1],boundary.float())
     loss = piexl_loss
     return loss
 
@@ -262,7 +269,7 @@ def loss_calc_instance(pred, label,boundary, weights):
     piexl_loss = criterion_piexl(pred[0],label,weights)
     instanc_class = get_instance_label(label,boundary)
     instance_loss = CrossEntropy2d(pred[1],instanc_class)
-    loss = instance_loss
+    loss = instance_loss+piexl_loss
     return loss
 
 def loss_calc_only_instance(pred, label,boundary, weights=None):
