@@ -13,8 +13,8 @@ import os
 from torch.nn.modules.loss import _Loss, _WeightedLoss
 
 
-DATASET = 'amsterdam' #amsterdam hongkong global_hongkong
-MODEL = 'TransUNet' #Dino Dino_mask Dino_height Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet
+DATASET = 'hongkong' #amsterdam hongkong global_hongkong
+MODEL = 'Dino_ufz' #Dino Dino_mask Dino_height Dino_ufz Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet
 #FTransUNet STunet MFNet太慢了
 MODE = 'train'
 
@@ -227,10 +227,10 @@ def get_instance_label(labels,boundarys):
 
 def loss_calculate(output,target,boundary,epoch):
     if 'Dino' in MODEL:
-        if epoch<NUM_INSTANCE:
-            loss_ce = loss_calc(output, target,boundary, WEIGHTS)
-        else:
+        if torch.is_tensor(output[1]) and epoch>NUM_INSTANCE:
             loss_ce = loss_calc_instance(output, target,boundary, WEIGHTS)
+        else:
+            loss_ce = loss_calc(output, target,boundary, WEIGHTS)
     else:
         loss_ce = loss_calc(output, target,boundary, WEIGHTS)
     return loss_ce

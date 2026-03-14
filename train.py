@@ -21,6 +21,9 @@ if MODEL == 'Dino':
 if MODEL == 'Dino_mask':
     from model.singleDino.singleDino_single_building_mask import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
+if MODEL == 'Dino_ufz':
+    from model.singleDino.singleDino_single_building_ufz import UNetFormer as singleDino
+    net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'Dino_height':
     from model.singleDino.singleDino_single_building_height import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
@@ -74,7 +77,6 @@ test_set = get_dataloader(DATASET, 'test')
 test_loader = torch.utils.data.DataLoader(test_set,batch_size=10)
 print("training : ", len(train_set))
 print("val : ", len(val_set))
-print("training : ", len(train_set))
 print("test : ", len(test_set))
 
 base_lr = 0.005

@@ -100,8 +100,8 @@ def get_year_type(label):
     arr_processed[(arr_processed <0)] = 0
     return arr_processed
 def get_ufz_type(arr_processed):
-    arr_processed[(arr_processed >= 1) & (arr_processed <= 4)] = 1
-    arr_processed[(arr_processed >= 5) & (arr_processed <= 9)] = 2
+    arr_processed[(arr_processed >= 1) & (arr_processed <= 4)] = 0
+    arr_processed[(arr_processed >= 5) & (arr_processed <= 9)] = 1
     return arr_processed
 
 class Hongkong_dataset(torch.utils.data.Dataset):
@@ -179,14 +179,17 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         height = height / 100.0  # normalize to 0-1
         height = height[np.newaxis, :, :]
 
-        # ufzs=[]
-        # for year in ['1990','2000','2010','2020']:
-        #     ufz = io.imread(self.UFZ_FOLDER+name+'ufz_'+year+'.tif')
-        #     ufz = np.asarray(ufz, dtype=np.float32)
-        #     ufz=get_ufz_type(ufz)
-        #     # unique_values1 = np.unique(ufz)
-        #     # print(unique_values1)
-        #     ufzs.append(ufz)
+        ufzs=[]
+        for year in ['1990','2000','2010','2020']:
+            if os.path.exists(self.UFZ_FOLDER+name+'ufz_'+year+'.tif'):
+                ufz = io.imread(self.UFZ_FOLDER+name+'ufz_'+year+'.tif')
+                ufz = np.asarray(ufz, dtype=np.float32)
+                ufz=get_ufz_type(ufz)
+                # unique_values1 = np.unique(ufz)
+                # print(unique_values1)
+                ufzs.append(ufz)
+            else:
+                ufzs.append(np.zeros((512, 512)))
 
 
         label = np.asarray(io.imread(self.LABEL_FOLDER+name+'class.tif'))
@@ -214,12 +217,11 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         #convert_to_color(instance[0]-1, main_dir='.', name='instance_{}'.format(i))
 
         # Data augmentation
+        ufzs = np.stack(ufzs, axis=0).astype(np.float32)
         if self.mode == 'train' and self.augmentation:
-            #data, one_instances, boundary, height, label,instance, ufzs[0],ufzs[1], ufzs[2], ufzs[3] = self.data_augmentation(data, one_instances,boundary, height, label,instance,ufzs[0],ufzs[1], ufzs[2], ufzs[3])
-            data, boundary, height,label,label_id = self.data_augmentation(data,boundary, height, label,label_id)
-        # ufzs = np.stack(ufzs, axis=0)
+            data, boundary, height,label,label_id, ufzs = self.data_augmentation(data,boundary, height, label,label_id, ufzs)
+        
         # ufzs = generate_first_impervious_year(ufzs).astype(np.float32)
-
         # zero_mask = np.repeat((instance == -1)[np.newaxis, :, :], repeats=3, axis=0)
         # save_img(data, './', name = "imgpre_{}".format(1))
         # data [zero_mask]= 0
@@ -232,8 +234,7 @@ class Hongkong_dataset(torch.utils.data.Dataset):
             return (torch.from_numpy(data),
                     torch.from_numpy(data), #无用之前是instances表示每一个instance 的mask，但train里面没有用到，先放data占位
                     torch.from_numpy(height),
-                    #torch.from_numpy(ufzs-1),
-                    torch.from_numpy(data),
+                    torch.from_numpy(ufzs),
                     torch.from_numpy(label_id)-1,
                     torch.from_numpy(boundary),
                     torch.from_numpy(label) #具体的年份，train的时候无用
@@ -243,8 +244,7 @@ class Hongkong_dataset(torch.utils.data.Dataset):
             return (torch.from_numpy(data),
                     torch.from_numpy(instances),
                     torch.from_numpy(height),
-                    #torch.from_numpy(ufzs-1),
-                    torch.from_numpy(data),
+                    torch.from_numpy(ufzs),
                     torch.from_numpy(label_id)-1,
                     torch.from_numpy(boundary),
                     torch.from_numpy(label)

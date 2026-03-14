@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
 from .weak_select import WeaklySelector,GCNCombiner
-from .resnet import DSMEncoder
+from .resnet import LULCEncoder,DSMEncoder
 
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
@@ -403,6 +403,18 @@ class DINOv3(nn.Module):
         return all_layers
 
 
+class GatedFusion(nn.Module):
+    def __init__(self, c):
+        super().__init__()
+        self.conv = nn.Conv2d(c, 1, 1)
+        self.bn = nn.BatchNorm2d(c)
+
+    def forward(self, rgb_feat, lulc_feat):
+        # 门控：模型自己学 LULC 可信度
+        gate = torch.sigmoid(self.conv(lulc_feat))
+        fused = rgb_feat  + gate * lulc_feat
+        return self.bn(fused)
+
 class UNetFormer(nn.Module):
     def __init__(self,
                  decode_channels=64,
@@ -449,12 +461,16 @@ class UNetFormer(nn.Module):
         self.fpn4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
         self.decoder = Decoder(encoder_channels, decode_channels, dropout, window_size, num_classes)
-        self.deep_encoder =DSMEncoder()
+        self.deep_encoder =LULCEncoder()
 
         self.classifier =nn.Sequential( nn.BatchNorm1d(decode_channels),  # d是feat_map的通道数，添加BN稳定特征
                             nn.Dropout(0.1),    # 轻微dropout，减少过拟合+数值波动
                             nn.Linear(decode_channels, num_classes))
         
+        self.fuse1 = GatedFusion(256)
+        self.fuse2 = GatedFusion(256)
+        self.fuse3 = GatedFusion(256)
+        self.fuse4 = GatedFusion(256)
 
         # self.selector = WeaklySelector(outs, num_classes, num_selects, w_fpn_size=1536)
         # num_selects = {
@@ -469,15 +485,23 @@ class UNetFormer(nn.Module):
 
     def forward(self, x, depth, masks,ufzs):
         b, _, h, w = x.size()
-        depth_feats = self.deep_encoder(depth)
+        ufzs_feats = self.deep_encoder(ufzs)
         deepx = self.image_encoder(x)  # 256*1024  
         deepx = deepx[0].permute(0, 2, 1).view(b, 1024, 32, 32)
         ## 这个deepx可由interaction_indexes这个控制，配了一个UNetformer的解码器，自行修改
         deepx = self.neck(deepx)
-        res1 = self.fpn1(deepx) + depth_feats[0]  # 256 128 128 
-        res2 = self.fpn2(deepx) + depth_feats[1] # 256 64 64
-        res3 = self.fpn3(deepx) + depth_feats[2]# 256 32 32
-        res4 = self.fpn4(deepx) + depth_feats[3] # 256 16 16
+        res1 = self.fpn1(deepx) # 256 128 128 
+        res2 = self.fpn2(deepx) # 256 64 64
+        res3 = self.fpn3(deepx) # 256 32 32
+        res4 = self.fpn4(deepx) # 256 16 16
+
+
+        # 🔥 抗噪门控融合
+        res1 = self.fuse1(res1, ufzs_feats[0])
+        res2 = self.fuse2(res2, ufzs_feats[1])
+        res3 = self.fuse3(res3, ufzs_feats[2])
+        res4 = self.fuse4(res4, ufzs_feats[3])
+
         x_piexl,feat_map = self.decoder(res1, res2, res3, res4, h, w)
         # 遍历该图的所有mask
 

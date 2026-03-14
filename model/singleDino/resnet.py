@@ -211,24 +211,65 @@ def resnet101(pretrained=False,in_channels=3, **kwargs):
 class DSMEncoder(nn.Module):
     def __init__(self):
         super().__init__()
-        
-        # 输出全部 256 通道，严格匹配你的 RGB FPN
+
+        # 输入：1 × 512 × 512
+        # 输出 4 个尺度，全部 256 通道，严格匹配你的 res1~res4
+
+        # 512 → 256
         self.conv1 = nn.Conv2d(1, 256, kernel_size=3, stride=2, padding=1)
+        self.bn1 = nn.BatchNorm2d(256)
+
+        # 256 → 128
+        self.conv2 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
+        self.bn2 = nn.BatchNorm2d(256)
+
+        # 128 → 64
+        self.conv3 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
+        self.bn3 = nn.BatchNorm2d(256)
+
+        # 64 → 32
+        self.conv4 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
+        self.bn4 = nn.BatchNorm2d(256)
+
+        # 32 → 16
+        self.conv5 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
+        self.bn5 = nn.BatchNorm2d(256)
+
+    def forward(self, x):
+        # 输入 DSM: [B, 1, 512, 512]
+
+        x = F.relu(self.bn1(self.conv1(x)))  # 256 × 256 × 256
+        x1 = F.relu(self.bn2(self.conv2(x))) # 256 × 128 × 128  ← 匹配 res1
+        x2 = F.relu(self.bn3(self.conv3(x1)))# 256 × 64 × 64    ← 匹配 res2
+        x3 = F.relu(self.bn4(self.conv4(x2)))# 256 × 32 × 32    ← 匹配 res3
+        x4 = F.relu(self.bn5(self.conv5(x3)))# 256 × 16 × 16   ← 匹配 res4
+
+        # 输出顺序和你的 res1~res4 完全对应
+        return [x1, x2, x3, x4]
+    
+
+
+class LULCEncoder(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # 输入：4 通道（1990,2000,2010,2020）
+        self.conv1 = nn.Conv2d(4, 256, kernel_size=3, stride=2, padding=1)
         self.conv2 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
         self.conv3 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
         self.conv4 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
-        
+        self.conv5 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
+
         self.bn1 = nn.BatchNorm2d(256)
         self.bn2 = nn.BatchNorm2d(256)
         self.bn3 = nn.BatchNorm2d(256)
         self.bn4 = nn.BatchNorm2d(256)
+        self.bn5 = nn.BatchNorm2d(256)
 
     def forward(self, x):
-        # 输入 DSM：[B, 1, H, W]
-        x1 = F.relu(self.bn1(self.conv1(x)))  # 1/2  256 × 128 ×128
-        x2 = F.relu(self.bn2(self.conv2(x1))) # 1/4  256 × 64 ×64
-        x3 = F.relu(self.bn3(self.conv3(x2))) # 1/8 256 ×32×32
-        x4 = F.relu(self.bn4(self.conv3(x3))) # 1/16 256 ×16×16
-        
-        # 四个尺度，全部 256 通道，完美匹配你的 res1~res4
+        # x: [B, 4, 512, 512]
+        x = F.relu(self.bn1(self.conv1(x)))  # 256, 256, 256
+        x1 = F.relu(self.bn2(self.conv2(x))) # 256, 128, 128
+        x2 = F.relu(self.bn3(self.conv3(x1)))# 256, 64, 64
+        x3 = F.relu(self.bn4(self.conv4(x2)))# 256, 32, 32
+        x4 = F.relu(self.bn5(self.conv5(x3)))# 256, 16, 16
         return [x1, x2, x3, x4]
