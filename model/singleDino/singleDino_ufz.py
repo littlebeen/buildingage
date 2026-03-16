@@ -401,6 +401,68 @@ class DINOv3(nn.Module):
         return all_layers
 
 
+class SimpleSpatialAttention(nn.Module):
+    """
+    轻量空间注意力模块，生成H×W×1的像素级注意力权重图（权重∈[0,1]）
+    输入：遥感特征与土地利用特征的拼接特征（C*2, H, W）
+    输出：空间注意力权重图（1, H, W）
+    """
+    def __init__(self, kernel_size=3):
+        super(SimpleSpatialAttention, self).__init__()
+        assert kernel_size in (3, 7), "kernel_size must be 3 or 7"
+        padding = 3 if kernel_size == 7 else 1
+        # 卷积层提取空间注意力特征，sigmoid激活保证权重0-1
+        self.conv = nn.Conv2d(2, 1, kernel_size=kernel_size, padding=padding, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        # 输入x：拼接特征 (B, 2C, H, W)
+        # 空间维度全局池化：平均池化+最大池化，保留空间特征
+        avg_out = torch.mean(x, dim=1, keepdim=True)  # (B, 1, H, W)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)  # (B, 1, H, W)
+        # 拼接池化特征，生成注意力权重
+        x_cat = torch.cat([avg_out, max_out], dim=1)  # (B, 2, H, W)
+        attention_map = self.sigmoid(self.conv(x_cat))  # (B, 1, H, W)，权重∈[0,1]
+        return attention_map
+
+class AttentionFusionBlock(nn.Module):
+    """
+    注意力融合模块：实现土地利用特征轻量编码+注意力加权+与遥感特征融合
+    输入：
+        - remote_feat: 遥感图像浅层特征 (B, C, H, W)（U-Net编码器中间层输出）
+        - landuse_feat: 土地利用编码特征 (B, 1, H, W)（首次不透化年份单通道图）
+    输出：
+        - fused_feat: 注意力加权融合后的特征 (B, C, H, W)（与遥感特征同维度，可直接送入后续网络）
+    """
+    def __init__(self, in_channels):
+        super(AttentionFusionBlock, self).__init__()
+        # 1×1轻量卷积：将土地利用1通道特征编码为C通道，与遥感特征通道匹配
+        self.landuse_encoder = nn.Conv2d(1, in_channels, kernel_size=1, stride=1, padding=0, bias=False)
+        # 空间注意力模块：生成像素级权重
+        self.attention = SimpleSpatialAttention(kernel_size=3)
+        # 批量归一化：稳定训练，减少过拟合
+        self.bn = nn.BatchNorm2d(in_channels)
+
+    def forward(self, remote_feat, landuse_feat):
+        # 步骤1：土地利用特征轻量编码（1通道→C通道），保持H×W不变
+        landuse_feat_encoded = self.landuse_encoder(landuse_feat)  # (B, C, H, W)
+        landuse_feat_encoded = self.bn(landuse_feat_encoded)
+        landuse_feat_encoded = F.relu(landuse_feat_encoded)
+
+        # 步骤2：拼接遥感特征与编码后的土地利用特征，用于生成注意力权重
+        feat_cat = torch.cat([remote_feat, landuse_feat_encoded], dim=1)  # (B, 2C, H, W)
+
+        # 步骤3：生成像素级注意力权重图
+        attn_map = self.attention(feat_cat)  # (B, 1, H, W)，权重∈[0,1]
+
+        # 步骤4：土地利用特征注意力加权（突出有效时序特征，抑制噪声）
+        landuse_feat_weighted = landuse_feat_encoded * attn_map  # (B, C, H, W)
+
+        # 步骤5：与遥感特征逐元素相加融合（特征互补，效率最高）
+        fused_feat = remote_feat + landuse_feat_weighted  # (B, C, H, W)
+
+        return fused_feat, attn_map  # 返回融合特征+注意力权重（权重可用于可视化分析）
+
 class UNetFormer(nn.Module):
     def __init__(self,
                  decode_channels=64,
@@ -419,16 +481,6 @@ class UNetFormer(nn.Module):
                 pretrained=False  # 我们用自定义 checkpoint
             ),
             interaction_indexes=[23]
-        )
-        mask_in_chans=16
-        self.mask_encoder = nn.Sequential(
-            nn.Conv2d(1, mask_in_chans // 4, kernel_size=2, stride=2),
-            LayerNorm2d(mask_in_chans // 4),
-            nn.GELU(),
-            nn.Conv2d(mask_in_chans // 4, mask_in_chans, kernel_size=2, stride=2),
-            LayerNorm2d(mask_in_chans),
-            nn.GELU(),
-            nn.Conv2d(mask_in_chans, 256, kernel_size=1),
         )
 
         encoder_channels = (256, 256, 256, 256)
@@ -457,10 +509,13 @@ class UNetFormer(nn.Module):
         self.fpn4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
         self.decoder = Decoder(encoder_channels, decode_channels, dropout, window_size, num_classes)
+        self.attention_fusion = AttentionFusionBlock(in_channels=256)
+        self.pool1 = nn.MaxPool2d(4, 4)  # 下采样1/2
 
     def forward(self, x, depth, mask,ufzs):
         b, _, h, w = x.size()
-        deepx = self.image_encoder(x)  # 256*1024  
+        landuse_feat_pool = self.pool1(ufzs) 
+        deepx = self.image_encoder(x)  # 256*1024
         deepx = deepx[0].permute(0, 2, 1).view(b, 1024, 32, 32)
         ## 这个deepx可由interaction_indexes这个控制，配了一个UNetformer的解码器，自行修改
         deepx = self.neck(deepx)
@@ -468,5 +523,6 @@ class UNetFormer(nn.Module):
         res2 = self.fpn2(deepx)
         res3 = self.fpn3(deepx)
         res4 = self.fpn4(deepx)
+        res1, attn_map = self.attention_fusion(res1, landuse_feat_pool) 
         x = self.decoder(res1, res2, res3, res4, h, w)
         return x

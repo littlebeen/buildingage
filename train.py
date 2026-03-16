@@ -21,8 +21,8 @@ if MODEL == 'Dino':
 if MODEL == 'Dino_mask':
     from model.singleDino.singleDino_single_building_mask import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
-if MODEL == 'Dino_ufz':
-    from model.singleDino.singleDino_single_building_ufz import UNetFormer as singleDino
+if MODEL == 'Dino_ufz_height':
+    from model.singleDino.singleDino_single_building_height_ufz import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'Dino_height':
     from model.singleDino.singleDino_single_building_height import UNetFormer as singleDino
@@ -184,13 +184,13 @@ def test(net, first=False,loader = val_loader,epoch=100):
             data, mask,height,ufzs, target,boundary, label_year = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda()), Variable(label_year.cuda())
             output = net(data, height, boundary, ufzs)
             class_indices = get_result(output[0])
-            # if batch_idx==0:
+            # if batch_idx<10:
             #     for item in range(class_indices.shape[0]):
             #         class_indices[target == -1]=-1
-            #         convert_to_color(class_indices[item], main_dir, name = "pred_{}".format(item))
-            #         convert_to_color(target[item], main_dir, name = "gt_{}".format(item))
-                    # save_img(data[item], main_dir, name = "img_{}".format(item))
-                    # save_img(height[item], main_dir, name = "height_{}".format(item))
+            #         convert_to_color(class_indices[item], main_dir, name = "pred_{}".format(batch_idx))
+            #         convert_to_color(target[item], main_dir, name = "gt_{}".format(batch_idx))
+            #         save_img(data[item], main_dir, name = "img_{}".format(batch_idx))
+            #         save_img(height[item], main_dir, name = "height_{}".format(batch_idx))
             instance_num,correct,all_building_year = get_instance_metric(output[0], mask[0],label_year, target)
             if torch.is_tensor(output[1]) and epoch>NUM_INSTANCE:
                 correct = get_result(output[1]).cpu()
@@ -346,8 +346,8 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
     iter_ = 0
     criterionor = WeightedOrdinalLoss(num_classes = N_CLASSES)
     for e in range(1, epochs + 1):
-        # if e == 1:
-        #     test_function(net, first=True)
+        if e == 1:
+            test_function(net, first=True)
         if scheduler is not None:
             scheduler.step()
         net.train()
@@ -384,7 +384,7 @@ test_function = test_semantic if DATASET=='amsterdam' else test
 
 if MODE == 'train':
     # net.load_state_dict(torch.load('./Dino_epoch42_0.4564934817950233.pth'),strict=False) 
-    train(net, optimizer, 70, test_function, scheduler)
+    train(net, optimizer, 60, test_function, scheduler)
 if MODE == 'test':
     net.load_state_dict(torch.load('./Dino_epoch42_0.4564934817950233.pth'),strict=True) 
     net.eval()

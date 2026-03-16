@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
+from .weak_select import WeaklySelector,GCNCombiner
+from .resnet import LULCEncoder,DSMEncoder
 
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
@@ -399,6 +401,18 @@ class DINOv3(nn.Module):
                 x, n=self.interaction_indexes
             )
         return all_layers
+    
+class GatedFusion(nn.Module):
+    def __init__(self, c):
+        super().__init__()
+        self.conv = nn.Conv2d(c, 1, 1)
+        self.bn = nn.BatchNorm2d(c)
+
+    def forward(self, rgb_feat, dsm_feat, lulc_feat):
+        # 门控：模型自己学 LULC 可信度
+        gate = torch.sigmoid(self.conv(lulc_feat))
+        fused = rgb_feat + dsm_feat + gate * lulc_feat
+        return self.bn(fused)
 
 
 class UNetFormer(nn.Module):
@@ -446,44 +460,80 @@ class UNetFormer(nn.Module):
         self.fpn3 = nn.Identity()
         self.fpn4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-
         self.decoder = Decoder(encoder_channels, decode_channels, dropout, window_size, num_classes)
+        self.deep_encoder =DSMEncoder()
+        self.ufz_encoder =LULCEncoder()
 
-    def forward(self, x, depth, mask,ufzs):
+        self.classifier =nn.Sequential( nn.BatchNorm1d(decode_channels),  # d是feat_map的通道数，添加BN稳定特征
+                            nn.Dropout(0.1),    # 轻微dropout，减少过拟合+数值波动
+                            nn.Linear(decode_channels, num_classes))
+        
+
+         
+        self.fuse1 = GatedFusion(256)
+        self.fuse2 = GatedFusion(256)
+        self.fuse3 = GatedFusion(256)
+        self.fuse4 = GatedFusion(256)
+
+    def forward(self, x, depth, masks,ufzs):
         b, _, h, w = x.size()
+        depth_feats = self.deep_encoder(depth)
+        ufzs_feats = self.ufz_encoder(ufzs)
         deepx = self.image_encoder(x)  # 256*1024  
         deepx = deepx[0].permute(0, 2, 1).view(b, 1024, 32, 32)
         ## 这个deepx可由interaction_indexes这个控制，配了一个UNetformer的解码器，自行修改
         deepx = self.neck(deepx)
-        res1 = self.fpn1(deepx)
-        res2 = self.fpn2(deepx)
-        res3 = self.fpn3(deepx)
-        res4 = self.fpn4(deepx)
+        res1 = self.fpn1(deepx)   # 256 128 128 
+        res2 = self.fpn2(deepx) # 256 64 64
+        res3 = self.fpn3(deepx) # 256 32 32
+        res4 = self.fpn4(deepx) # 256 16 16
+
+        res1 = self.fuse1(res1, depth_feats[0], ufzs_feats[0])
+        res2 = self.fuse2(res2, depth_feats[1], ufzs_feats[1])
+        res3 = self.fuse3(res3, depth_feats[2], ufzs_feats[2])
+        res4 = self.fuse4(res4, depth_feats[3], ufzs_feats[3])
+
         x_piexl,feat_map = self.decoder(res1, res2, res3, res4, h, w)
         # 遍历该图的所有mask
 
+        B, d, W_feat, H_feat = feat_map.shape
+        buildings=[]
+        for b in range(B):
+            mask = masks[b, :, :] 
+            feature = feat_map[b, :, :, :]
+            building_ids = torch.unique(mask)
+            building_ids = [id for id in building_ids if id != -1]
+            for bid in building_ids:
+                mask_bid = (mask == bid).float()  # 生成当前建筑的二值mask
+                mask_bid = mask_bid.unsqueeze(0).unsqueeze(0)
+                mask_interp = nn.functional.interpolate(
+                    mask_bid, 
+                    size=(W_feat, H_feat),  # 对齐特征图尺寸
+                    mode='bilinear',        # 双线性插值（适合mask）
+                    align_corners=True     # 避免边缘失真，推荐设置
+                )
+                mask_interp = mask_interp.squeeze()
+                
+                feat_flat = feature.reshape(d, -1)  # (d, 128×128)
+                mask_flat = mask_interp.reshape(1, -1)  # (1, 128×128)
+                global_feat = torch.sum(feat_flat * mask_flat, dim=1) / torch.clamp(mask_flat.sum(), min=1e-6)
+                global_feat = F.normalize(global_feat, p=2, dim=0)
+                buildings.append(global_feat)
 
-        # _, d, W_feat, H_feat = feat_map.shape
-        # _,n,_,_ =mask.shape
-        # mask_float = mask.float()
-        # mask_interp = nn.functional.interpolate(
-        #     mask_float, 
-        #     size=(W_feat, H_feat),  # 对齐特征图尺寸
-        #     mode='bilinear',        # 双线性插值（适合mask）
-        #     align_corners=False     # 避免边缘失真，推荐设置
-        # )
-        # feat_map = feat_map.detach()
-        # mask_expand = mask_interp.unsqueeze(2)  # 维度变为 B×3×1×W×H
-        # feat_map_expand = feat_map.unsqueeze(1)  # 维度变为 B×1×d×W×H
-        # masked_feat = feat_map_expand * mask_expand  # 核心逻辑保留，仅维度适配
-        # masked_feat_flat = masked_feat.reshape(b*n, d, W_feat, H_feat)  # 展平mask通道和batch
-        # ins_feat_flat = self.avg_pool(masked_feat_flat).squeeze()  # (B×3)×d（squeeze后去掉1×1维度）
-        # logits_flat = self.classifier(ins_feat_flat)  # (B×3)×num_classes
-        # logits = logits_flat.reshape(b, n, -1)  # -1自动匹配num_classes
-        # logits = logits.squeeze()
-
-        return x_piexl, 1
+        combined_tensor = torch.stack(buildings, dim=0)
+        logits = self.classifier(combined_tensor)  # (B×3)×num_classes
+        logits_clamped = torch.clamp(logits, min=-10.0, max=10.0)
+        return x_piexl, 1 
     
+    def fuse_feature(self, global_feature, local_feature=None):
+        """ fuse global feature with local feature
+        global feature: produced by backbone or PFI module
+        local feature: produced by local branch
+        """
+
+        ### addition
+        local_feature = self.local_proj_layer(local_feature)
+        feature = global_feature + 0.5 * local_feature
+        return feature
 
 
