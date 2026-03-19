@@ -60,6 +60,21 @@ if MODEL == 'Segformer':
 if MODEL == 'TransUNet':
     from model.TransUNet.vit_seg_modeling import VisionTransformer
     net = VisionTransformer(num_classes=N_CLASSES).cuda()
+if MODEL == 'CMT':
+    from model.CMT.cmt import CMT
+    net = CMT(num_classes=N_CLASSES).cuda()
+if MODEL == 'A2FPN':
+    from model.A2FPN.a2fpn import A2FPN
+    net = A2FPN(num_classes=N_CLASSES).cuda()
+if MODEL == 'Unet':
+    from model.Unet.Unet import Unet
+    net = Unet(num_classes=N_CLASSES).cuda()
+if MODEL == 'Deeplab':
+    from model.Deeplab.Deeplab import DeepLabV3
+    net = DeepLabV3(num_classes=N_CLASSES).cuda()
+if MODEL == 'FTransDeepLab':
+    from model.FTransDeepLab.FTransDeepLab import FTransDeepLab
+    net = FTransDeepLab(num_classes=N_CLASSES).cuda()
 
 params = 0
 for name, param in net.named_parameters():

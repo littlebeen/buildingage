@@ -62,7 +62,7 @@ class Decoder_block(nn.Module):
             nn.ConvTranspose2d(in_channels=608, out_channels=304, kernel_size=4, stride=2, padding=1)
         )
         self.stage_up_4 = nn.Sequential(
-            nn.Conv2d(in_channels=608, out_channels=608, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels=368, out_channels=608, kernel_size=3, padding=1),
             nn.BatchNorm2d(608),
             nn.ReLU(),
             nn.Conv2d(in_channels=608, out_channels=608, kernel_size=3, padding=1),
@@ -74,7 +74,7 @@ class Decoder_block(nn.Module):
             nn.ConvTranspose2d(in_channels=304, out_channels=152, kernel_size=4, stride=2, padding=1)
         )
         self.stage_up_3 = nn.Sequential(
-            nn.Conv2d(in_channels=608, out_channels=304, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels=488, out_channels=304, kernel_size=3, padding=1),
             nn.BatchNorm2d(304),
             nn.ReLU(),
             nn.Conv2d(in_channels=304, out_channels=304, kernel_size=3, padding=1),
@@ -86,7 +86,7 @@ class Decoder_block(nn.Module):
             nn.ConvTranspose2d(in_channels=152, out_channels=76, kernel_size=4, stride=2, padding=1)
         )
         self.stage_up_2 = nn.Sequential(
-            nn.Conv2d(in_channels=304, out_channels=152, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels=244, out_channels=152, kernel_size=3, padding=1),
             nn.BatchNorm2d(152),
             nn.ReLU(),
             nn.Conv2d(in_channels=152, out_channels=152, kernel_size=3, padding=1),
@@ -98,7 +98,7 @@ class Decoder_block(nn.Module):
             nn.ConvTranspose2d(in_channels=76, out_channels=64, kernel_size=4, stride=2, padding=1)
         )
         self.stage_up_1 = nn.Sequential(
-            nn.Conv2d(in_channels=152, out_channels=76, kernel_size=3, padding=1),
+            nn.Conv2d(in_channels=122, out_channels=76, kernel_size=3, padding=1),
             nn.BatchNorm2d(76),
             nn.ReLU(),
             nn.Conv2d(in_channels=76, out_channels=76, kernel_size=3, padding=1),
@@ -296,7 +296,7 @@ class PatchEmbed(nn.Module):
 
 
 class CMT(nn.Module):
-    def __init__(self, img_size=224, in_chans=3, num_classes=1000, embed_dims=[46, 92, 184, 368], stem_channel=16,
+    def __init__(self, img_size=512, in_chans=3, num_classes=1000, embed_dims=[46, 92, 184, 368], stem_channel=16,
                  fc_dim=1280,
                  num_heads=[1, 2, 4, 8], mlp_ratios=[3.6, 3.6, 3.6, 3.6], qkv_bias=True, qk_scale=None,
                  representation_size=None,
