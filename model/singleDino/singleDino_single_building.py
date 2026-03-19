@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
-
+from config import hotmap
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
 class Norm2d(nn.Module):
@@ -462,7 +462,7 @@ class UNetFormer(nn.Module):
         res4 = self.fpn4(deepx)
         x_piexl,feat_map = self.decoder(res1, res2, res3, res4, h, w)
         # 遍历该图的所有mask
-
+        #hotmap(feat_map[0])
 
         # _, d, W_feat, H_feat = feat_map.shape
         # _,n,_,_ =mask.shape

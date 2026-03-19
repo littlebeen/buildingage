@@ -2,9 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
-from .weak_select import WeaklySelector,GCNCombiner
 from .resnet import LULCEncoder,DSMEncoder
-
+from torchvision.ops import DeformConv2d
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
 class Norm2d(nn.Module):
@@ -402,17 +401,33 @@ class DINOv3(nn.Module):
             )
         return all_layers
     
-class GatedFusion(nn.Module):
-    def __init__(self, c):
+class TriModalAttentionFusion(nn.Module):
+    def __init__(self, dim):
         super().__init__()
-        self.conv = nn.Conv2d(c, 1, 1)
-        self.bn = nn.BatchNorm2d(c)
+        self.norm = LayerNorm2d(dim)
+        self.attention = nn.Sequential(
+            nn.Conv2d(dim*3, dim, 1),
+            nn.GELU(),
+            nn.Conv2d(dim, 3, 1),
+            nn.Softmax(dim=1)
+        )
+    def forward(self, img, depth, lulc):
+        weight = self.attention(torch.cat([img, depth, lulc], dim=1))
+        img_w = weight[:,0:1,:,:] * img
+        depth_w = weight[:,1:2,:,:] * depth
+        lulc_w = weight[:,2:3,:,:] * lulc
+        return self.norm(img_w + depth_w + lulc_w)
 
-    def forward(self, rgb_feat, dsm_feat, lulc_feat):
-        # 门控：模型自己学 LULC 可信度
-        gate = torch.sigmoid(self.conv(lulc_feat))
-        fused = rgb_feat + dsm_feat + gate * lulc_feat
-        return self.bn(fused)
+class DeformableConvBlock(nn.Module):
+    def __init__(self, in_c, out_c):
+        super().__init__()
+        self.offset = nn.Conv2d(in_c, 2*9, 3, padding=1)
+        self.deform = DeformConv2d(in_c, out_c, 3, padding=1)
+        self.norm = LayerNorm2d(out_c)
+    def forward(self, x):
+        offset = self.offset(x)
+        x = self.deform(x, offset)
+        return self.norm(x)
 
 
 class UNetFormer(nn.Module):
@@ -446,8 +461,8 @@ class UNetFormer(nn.Module):
         self.neck = nn.Sequential(
             nn.Conv2d(1024, 512, kernel_size=1, bias=False, ),
             LayerNorm2d(512),
-            nn.Conv2d(512, 256, kernel_size=3, padding=1, bias=False, ),
-            LayerNorm2d(256), )
+            DeformableConvBlock(512, 256),
+            LayerNorm2d(256) )
         self.fpn1 = nn.Sequential(
             nn.ConvTranspose2d(256, 256, kernel_size=2, stride=2),
             Norm2d(256),
@@ -464,16 +479,21 @@ class UNetFormer(nn.Module):
         self.deep_encoder =DSMEncoder()
         self.ufz_encoder =LULCEncoder()
 
-        self.classifier =nn.Sequential( nn.BatchNorm1d(decode_channels),  # d是feat_map的通道数，添加BN稳定特征
-                            nn.Dropout(0.1),    # 轻微dropout，减少过拟合+数值波动
-                            nn.Linear(decode_channels, num_classes))
+        self.classifier = nn.Sequential(
+            nn.BatchNorm1d(2 * decode_channels),
+            nn.Dropout(0.15),
+            nn.Linear(2 * decode_channels, decode_channels),
+            nn.GELU(),
+            nn.BatchNorm1d(decode_channels),
+            nn.Linear(decode_channels, num_classes)
+        )
         
 
          
-        self.fuse1 = GatedFusion(256)
-        self.fuse2 = GatedFusion(256)
-        self.fuse3 = GatedFusion(256)
-        self.fuse4 = GatedFusion(256)
+        self.fuse1 = TriModalAttentionFusion(256)
+        self.fuse2 = TriModalAttentionFusion(256)
+        self.fuse3 = TriModalAttentionFusion(256)
+        self.fuse4 = TriModalAttentionFusion(256)
 
     def forward(self, x, depth, masks,ufzs):
         b, _, h, w = x.size()
@@ -515,14 +535,19 @@ class UNetFormer(nn.Module):
                 mask_interp = mask_interp.squeeze()
                 
                 feat_flat = feature.reshape(d, -1)  # (d, 128×128)
+                #feat_flat = feature.flatten(1)
                 mask_flat = mask_interp.reshape(1, -1)  # (1, 128×128)
-                global_feat = torch.sum(feat_flat * mask_flat, dim=1) / torch.clamp(mask_flat.sum(), min=1e-6)
-                global_feat = F.normalize(global_feat, p=2, dim=0)
-                buildings.append(global_feat)
+                sum_m = torch.clamp(mask_flat.sum(), min=1e-6)
+                max_f = torch.max(feat_flat * mask_flat, dim=1)[0]
+                avg_f = torch.sum(feat_flat * mask_flat, dim=1) / sum_m
 
-        combined_tensor = torch.stack(buildings, dim=0)
-        logits = self.classifier(combined_tensor)  # (B×3)×num_classes
-        logits_clamped = torch.clamp(logits, min=-10.0, max=10.0)
-        return x_piexl, 1 
+                inst_feat = torch.cat([max_f, avg_f], dim=0)
+                inst_feat = F.normalize(inst_feat, p=2, dim=0)
+
+                buildings.append(inst_feat)
+
+        inst_logits = self.classifier(torch.stack(buildings, dim=0))  # (B×3)×num_classes
+        logits_clamped = torch.clamp(inst_logits, min=-10.0, max=10.0)
+        return x_piexl, logits_clamped 
     
 

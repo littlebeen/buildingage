@@ -7,8 +7,9 @@ from skimage import io
 from scipy.ndimage import label as label11
 from config import convert_to_color,save_img
 from scipy.stats import mode
+from .hongkong import get_ufz_type
 
-def generate_instance_mask(mask, ignore_bg = 0,min_pixel=160):
+def generate_instance_mask(mask, ignore_bg = 0,min_pixel=20):
 
     non_bg_mask = (mask != ignore_bg)
     non_bg_ids = mask[non_bg_mask]
@@ -42,60 +43,12 @@ def generate_instance_mask(mask, ignore_bg = 0,min_pixel=160):
     
     return remapped_mask, id_mapping
 
-def generate_first_impervious_year(imperv_data):
-    # 步骤1：数据维度校验与标准化（确保输入为4×W×H，类型为np.ndarray）
-    n_times, H, W = imperv_data.shape
-    assert n_times == 4, "输入数据应包含4个时相的impervious信息"
-    imperv = imperv_data.copy() 
-
-    # 步骤2：定义4个时相对应的年份（严格按1990/2000/2010/2020顺序）
-    year_mapping = np.array([3, 4, 5, 6])
-    first_imperv_map = np.full(shape=(1, H, W), fill_value=0, dtype=np.int32)
-
-    # 步骤3：创建有效像素掩码（排除缺测值0，仅保留1/2的有效像素）
-    valid_mask = (imperv != 0)
-    valid_pixel = valid_mask.all(axis=0)  # 形状(H, W)，True=该像素4个时相均无缺测
-
-    imperv_mask = (imperv == 2)  # 形状(4, H, W)，True=不透水面
-    first_imperv_idx = np.argmax(imperv_mask, axis=0)  # 形状(H, W)，值为0/1/2/3（对应4个时相）
-    # 修正：无不透水面的有效像素，首次索引设为-1
-    no_imperv = ~imperv_mask.any(axis=0)  # 形状(H, W)，True=全程无不透水面
-    first_imperv_idx[no_imperv] = 0
-
-    # 步骤5：验证首次不透化后是否永久保持（排除1→2→1的多次突变）
-    permanent_imperv = np.zeros(shape=(H, W), dtype=bool)  # 形状(H, W)，True=永久不透化
-    for i in range(H):
-        for j in range(W):
-            idx = first_imperv_idx[i, j]
-            if idx == -1:
-                continue  # 全程无不透水面，跳过
-            if valid_pixel[i, j]:
-                # 检查首次不透化后所有时相是否均为不透水面（2）
-                if imperv_mask[idx:, i, j].all():
-                    permanent_imperv[i, j] = True
-
-    ## 情况2：首次永久不透化的像素 → 赋值对应年份（1990/2000/2010/2020）
-    for idx in range(4):
-        # 找到该时相首次永久不透化的像素
-        target_pixel = (first_imperv_idx == idx) & permanent_imperv & valid_pixel
-        first_imperv_map[0, target_pixel] = year_mapping[idx]
-
-    ## 情况3：有效像素中全程透水（无不透水面）或多次突变（非永久不透化）→ 0（无建筑背景）
-    background_pixel = (no_imperv | ~permanent_imperv) & valid_pixel  # 形状(H, W)
-    first_imperv_map[0, background_pixel] = 0
-    return first_imperv_map
-
-
-def get_ufz_type(arr_processed):
-    arr_processed[(arr_processed >= 1) & (arr_processed <= 4)] = 1
-    arr_processed[(arr_processed >= 5) & (arr_processed <= 9)] = 2
-    return arr_processed
 
 class Hongkong_dataset(torch.utils.data.Dataset):
     def __init__(self, mode,cache=False, augmentation=True):
         super(Hongkong_dataset, self).__init__()
-        if mode =='val' or mode =='train':
-            self.data_files=[]
+        if mode =='train':
+            self.data_files=[1]
             return
         MAIN_FOLDER = '../dataset/global_Hongkong/'
         DATA_FOLDER = MAIN_FOLDER + 'image/tdop*.tif'
@@ -123,7 +76,9 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         height = io.imread(height_files)
         height = np.asarray(height, dtype='float32')
         height = height - height.min()
-        height = height / 500.0  # normalize to 0-1
+        height = height / 100.0  # normalize to 0-1
+        height = height[np.newaxis, :, :]
+
 
         ufzs=[]
         for year in ['1990','2000','2010','2020']:
@@ -141,25 +96,21 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         boundary = np.asarray(io.imread(boundary_files))
         boundary = boundary.astype(np.int64)
 
-        instance, id_mapping = generate_instance_mask(boundary)
-        instances = extract_instance_masks(instance) #转换为instance mask
+        boundary, id_mapping = generate_instance_mask(boundary)
+        instances = extract_instance_masks(boundary) #转换为instance mask
         # unique_values1 = np.unique(instance)
         # print(unique_values1)
         # print(instance_num)
         #convert_to_color(instance[0]-1, main_dir='.', name='instance_{}'.format(i))
 
-        height = height[np.newaxis, :, :]
-        boundary = boundary[np.newaxis, :, :]
-        ufzs = np.stack(ufzs, axis=0)
-        #ufzs = generate_first_impervious_year(ufzs).astype(np.float32)
-        zero_mask = np.repeat((instance == -1)[np.newaxis, :, :], repeats=3, axis=0)
-        data [zero_mask]= 0
+        ufzs = np.stack(ufzs, axis=0).astype(np.float32)
         #save_img(data, './', name = "img_{}".format(1))
         instances = np.array(instances)
         return (torch.from_numpy(data),
                 torch.from_numpy(instances),
                 torch.from_numpy(height),
-                torch.from_numpy(ufzs-1),
+                torch.from_numpy(ufzs),
+                torch.from_numpy(boundary),
                 id_mapping)
     
 

@@ -5,7 +5,7 @@ torch.cuda.device_count()
 import torch.optim as optim
 from torch.autograd import Variable
 from IPython.display import clear_output
-from config import convert_to_color, mse_rmse, DATASET,save_img,metrics,metrics_sinple,WeightedOrdinalLoss,accuracy,N_CLASSES,WINDOW_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL,loss_calc_only_instance,loss_calculate,NUM_INSTANCE
+from config import convert_to_color, mse_rmse, DATASET,save_img,metrics,metrics_sinple,WeightedOrdinalLoss,accuracy,N_CLASSES,WINDOW_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL,loss_calc_only_instance,loss_calculate,PRETRAIN
 from dataset import get_dataloader
 import os
 from kmean import generate_image
@@ -22,7 +22,7 @@ if MODEL == 'Dino_mask':
     from model.singleDino.singleDino_single_building_mask import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'Dino_ufz_height':
-    from model.singleDino.singleDino_single_building_height_ufz import UNetFormer as singleDino
+    from model.singleDino.singleDino_single_building_improve import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'Dino_height':
     from model.singleDino.singleDino_single_building_height import UNetFormer as singleDino
@@ -184,15 +184,19 @@ def test(net, first=False,loader = val_loader,epoch=100):
             data, mask,height,ufzs, target,boundary, label_year = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda()), Variable(label_year.cuda())
             output = net(data, height, boundary, ufzs)
             class_indices = get_result(output[0])
-            # if batch_idx<10:
+            # if batch_idx%10==0:
+            #     print(batch_idx)
+            # if batch_idx<20:
             #     for item in range(class_indices.shape[0]):
             #         class_indices[target == -1]=-1
-            #         convert_to_color(class_indices[item], main_dir, name = "pred_{}".format(batch_idx))
-            #         convert_to_color(target[item], main_dir, name = "gt_{}".format(batch_idx))
-            #         save_img(data[item], main_dir, name = "img_{}".format(batch_idx))
-            #         save_img(height[item], main_dir, name = "height_{}".format(batch_idx))
+                    #boundary[boundary>=0]=1
+                    #save_img(boundary[item], main_dir, name = "boundary_{}".format(batch_idx))
+                    #convert_to_color(class_indices[item], main_dir, name = "pred_{}".format(batch_idx))
+                    #convert_to_color(target[item], main_dir, name = "gt_{}".format(batch_idx))
+                    #save_img(data[item], main_dir, name = "img_{}".format(batch_idx))
+                    #save_img(height[item], main_dir, name = "height_{}".format(batch_idx))
             instance_num,correct,all_building_year = get_instance_metric(output[0], mask[0],label_year, target)
-            if torch.is_tensor(output[1]) and epoch>NUM_INSTANCE:
+            if torch.is_tensor(output[1]):
                 correct = get_result(output[1]).cpu()
 
             # mask_list.append(boundary.cpu())
@@ -279,11 +283,11 @@ def test_semantic(net,first=False, loader = val_loader,epoch=100):
             optimizer.zero_grad()
             output = net(data, height, boundary, ufzs)
             class_indices = get_result(output[0])
-            if batch_idx==0:
-                for item in range(class_indices.shape[0]):
-                    class_indices[target == -1]=-1
-                    convert_to_color(class_indices[item], main_dir, name = "pred_{}".format(item))
-                    convert_to_color(target[item], main_dir, name = "gt_{}".format(item))
+            # if batch_idx==0:
+            #     for item in range(class_indices.shape[0]):
+            #         class_indices[target == -1]=-1
+            #         convert_to_color(class_indices[item], main_dir, name = "pred_{}".format(item))
+                    # convert_to_color(target[item], main_dir, name = "gt_{}".format(item))
                     # save_img(data[item], main_dir, name = "img_{}".format(item))
                     # save_img(height[item], main_dir, name = "height_{}".format(item))
             valid_mask = target != -1
@@ -303,17 +307,17 @@ def test_all(net, loader = val_loader):
     all_building = np.zeros((341962, 6))
     # Switch the network to inference mode
     with torch.no_grad():
-        for batch_idx, (data, mask, height,ufzs, id_mapping) in enumerate(loader):
-            data, mask,height,ufzs = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda())
+        for batch_idx, (data, mask, height,ufzs,boundary, id_mapping) in enumerate(loader):
+            data, mask,height,ufzs,boundary = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()),Variable(boundary.cuda())
             optimizer.zero_grad()
-            output = net(data, height, mask, ufzs)
-            #class_indices = get_result(output[0])
-            #instance_class=get_mask_number(class_indices,mask) #这是每个instance 的类别，没有6分类的值，目前这个代码有问题
+            output = net(data, height, boundary, ufzs)
             all_np_keys = [key for key in id_mapping.keys() if isinstance(key, np.int64)]
             for i in range(len(all_np_keys)):
-                all_building[all_np_keys[i]]+=output[1][i].cpu().numpy()
-            if batch_idx>10:
-                break
+                count = (boundary == i).sum().item()
+                pp =output[1][i].cpu().numpy()*count/100.
+                all_building[all_np_keys[i]]+=pp
+            # if batch_idx>10:
+            #     break
             if batch_idx%100==0:
                 print(batch_idx)
         max_ids = np.argmax(all_building, axis=1)
@@ -386,7 +390,7 @@ if MODE == 'train':
     # net.load_state_dict(torch.load('./Dino_epoch42_0.4564934817950233.pth'),strict=False) 
     train(net, optimizer, 60, test_function, scheduler)
 if MODE == 'test':
-    net.load_state_dict(torch.load('./Dino_epoch42_0.4564934817950233.pth'),strict=True) 
+    net.load_state_dict(torch.load(PRETRAIN),strict=True) 
     net.eval()
     if DATASET=='global_hongkong':
         test_all(net,val_loader)

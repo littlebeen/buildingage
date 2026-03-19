@@ -11,13 +11,13 @@ from torch.autograd import Variable
 from PIL import Image
 import os
 from torch.nn.modules.loss import _Loss, _WeightedLoss
-
+import matplotlib.pyplot as plt
 
 DATASET = 'hongkong' #amsterdam hongkong global_hongkong
-MODEL = 'Dino_ufz' #Dino Dino_mask Dino_height Dino_ufz Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet
+MODEL = 'ABCNet' #Dino Dino_mask Dino_height Dino_ufz Dino_ufz_height Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet
 #FTransUNet STunet MFNet太慢了
-MODE = 'train'
-
+MODE = 'test'
+PRETRAIN ='./ABCNet_epoch27_0.31541903229559093.pth'
 # Parameters
 ## SwinFusion
 # WINDOW_SIZE = (64, 64) # Patch size
@@ -37,8 +37,6 @@ N_CLASSES = len(LABELS) # Number of classes
 WEIGHTS = torch.ones(N_CLASSES) # Weights for class balancing
 WEIGHTS[0] = 0.3
 CACHE = True # Store the dataset in-memory
-NUM_INSTANCE=37
-
 # ISPRS color palette
 # Let's define the standard ISPRS color palette
 palette = {-1 : (255, 255, 255), # Undefined (white)
@@ -95,6 +93,18 @@ def save_img(tensor, main_dir, name):
     im = Image.fromarray(im).save(name)
 
 
+def hotmap(feature):
+
+    # 取每个通道的均值，变成一张热力图 (128,128)
+    heatmap = feature.mean(dim=0).detach().cpu().numpy()
+
+    plt.figure(figsize=(8, 8))
+    plt.imshow(heatmap, cmap='jet')
+    plt.colorbar(shrink=0.8)
+    plt.axis('off')
+    plt.tight_layout()
+    plt.savefig('hotmap.png', dpi=300, bbox_inches='tight')
+
 def object_process(object):
     ids = np.unique(object)
     new_id = 1
@@ -122,6 +132,25 @@ def object_process(object):
 
 
 # Utils
+
+
+def focalLoss(inputs, targets, gamma=2,num_classes=N_CLASSES):
+    # inputs: 模型输出 [N, num_classes]
+    # targets: 标签 [N]
+    
+    log_prob = F.log_softmax(inputs, dim=-1)
+    prob = torch.exp(log_prob)
+    
+    # 核心：难样本加权
+    focal_weight = (1 - prob) ** gamma
+    log_prob = focal_weight * log_prob
+    
+    # 转成 one-hot
+    targets = F.one_hot(targets, num_classes=num_classes).float()
+    
+    # 计算损失
+    loss = - (targets * log_prob).sum(dim=-1)
+    return loss.mean()
 
 def get_random_pos(img, window_shape):
     """ Extract of 2D random patch of shape window_shape in the image """
@@ -227,7 +256,7 @@ def get_instance_label(labels,boundarys):
 
 def loss_calculate(output,target,boundary,epoch):
     if 'Dino' in MODEL:
-        if torch.is_tensor(output[1]) and epoch>NUM_INSTANCE:
+        if torch.is_tensor(output[1]):
             loss_ce = loss_calc_instance(output, target,boundary, WEIGHTS)
         else:
             loss_ce = loss_calc(output, target,boundary, WEIGHTS)
@@ -268,7 +297,7 @@ def loss_calc_instance(pred, label,boundary, weights):
     criterion_piexl = CrossEntropy2d_ignore().cuda()
     piexl_loss = criterion_piexl(pred[0],label,weights)
     instanc_class = get_instance_label(label,boundary)
-    instance_loss = CrossEntropy2d(pred[1],instanc_class)
+    instance_loss = focalLoss(pred[1],instanc_class)
     loss = instance_loss+piexl_loss
     return loss
 
