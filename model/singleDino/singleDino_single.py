@@ -2,9 +2,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange, repeat
-
+from .dbg_head import SpatialGatherModule, DPGHead
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
-
 class Norm2d(nn.Module):
     def __init__(self, embed_dim):
         super().__init__()
@@ -322,9 +321,6 @@ class Decoder(nn.Module):
 
         self.p1 = FeatureRefinementHead(encoder_channels[-4], decode_channels)
 
-        self.segmentation_head = nn.Sequential(ConvBNReLU(decode_channels, decode_channels),
-                                               nn.Dropout2d(p=dropout, inplace=True),
-                                               Conv(decode_channels, num_classes, kernel_size=1))
         self.init_weight()
 
     def forward(self, res1, res2, res3, res4, h, w):
@@ -336,10 +332,6 @@ class Decoder(nn.Module):
         x = self.b2(x)
 
         x = self.p1(x, res1)
-
-        x = self.segmentation_head(x)
-        x = F.interpolate(x, size=(h, w), mode='bilinear', align_corners=False)
-
         return x
 
     def init_weight(self):
@@ -374,6 +366,59 @@ Dinov3_checkpoint = torch.load(
 
 
 # Dinov3_checkpoint = torch.load("/media/lscsc/nas2/ziyi/TextSeg/PTH/DINOv3_ViT_LVD-1689M/dinov3_vith16plus_pretrain_lvd1689m-7c1da9a5.pth")
+
+
+class MGFEModule(object):
+
+    @classmethod
+    def update_feature_one(cls, query_feat, query_mask):
+        return cls.enabled_feature([query_feat], query_mask)[0]
+
+    @classmethod
+    def update_feature(cls, query_feats, support_feats, query_mask, support_masks):
+        query_feats = cls.enabled_feature(query_feats, query_mask)
+        support_feats = cls.enabled_feature(support_feats, support_masks)
+        return query_feats, support_feats
+
+    @classmethod
+    def enabled_feature(cls, feats, masks):
+        b, m, w, h = masks.shape
+        index_mask = torch.zeros_like(masks[:, 0]).long() + m
+        for i in range(m):
+            index_mask[masks[:, i]==1] = i
+        masks = torch.nn.functional.one_hot(index_mask)[:, :, :, :m].permute((0, 3, 1, 2))
+
+        enabled_feats = []
+        for feat in feats:
+            target_masks = F.interpolate(masks.float(), feat.shape[-2:], mode='nearest')
+            map_features = cls.my_masked_average_pooling(feat, target_masks)
+
+            b, m, w, h = target_masks.shape
+            _, _, c = map_features.shape
+            _map_features = map_features.permute(0, 2, 1).contiguous()
+            feature_sum = _map_features @ target_masks.view(b, m, -1)
+            feature_sum = feature_sum.view(b, c, w, h)
+
+            sum_mask = target_masks.sum(dim=1, keepdim=True)
+            enabled_feat = torch.div(feature_sum, sum_mask + 1e-8)
+            enabled_feats.append(enabled_feat)
+            pass
+        return enabled_feats
+
+    @staticmethod
+    def my_masked_average_pooling(feature, mask):
+        b, c, w, h = feature.shape
+        _, m, _, _ = mask.shape
+
+        _mask = mask.view(b, m, -1)
+        _feature = feature.view(b, c, -1).permute(0, 2, 1).contiguous()
+        feature_sum = _mask @ _feature
+        masked_sum = torch.sum(_mask, dim=2, keepdim=True)
+
+        masked_average_pooling = torch.div(feature_sum, masked_sum + 1e-8)
+        return masked_average_pooling
+
+    pass
 
 class DINOv3(nn.Module):
     def __init__(
@@ -446,9 +491,33 @@ class UNetFormer(nn.Module):
         self.fpn3 = nn.Identity()
         self.fpn4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.classifier = nn.Sequential(
+            nn.Linear(64, 512),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(512, num_classes)
+        )
+        self.segmentation_head = nn.Sequential(ConvBNReLU(decode_channels, decode_channels),
+                                               nn.Dropout2d(p=dropout, inplace=True),
+                                               Conv(decode_channels, 1, kernel_size=1))
         self.decoder = Decoder(encoder_channels, decode_channels, dropout, window_size, num_classes)
+    
+        self.spatial_gather_module=SpatialGatherModule(1)
+        self.lgc=DPGHead(decode_channels, decode_channels, pool='att', fusions=['channel_mul'])
+
+        self.segmentation_head_piexl = nn.Sequential(ConvBNReLU(decode_channels, decode_channels),
+                                               nn.Dropout2d(p=dropout, inplace=True),
+                                               Conv(decode_channels, num_classes, kernel_size=1))
+        
+        outch1, outch2, outch3, outch4 = 16, 128, 256, 512
+        self.decoder1 = nn.Sequential(
+            nn.Conv2d(outch4, outch3, (3, 3), padding=(1, 1), bias=True), nn.ReLU())
+            #nn.Conv2d(outch3, outch2, (3, 3), padding=(1, 1), bias=True), nn.ReLU())
+        
 
     def forward(self, x, depth, mask,ufzs):
+        mask1 = mask.clone().float()
         b, _, h, w = x.size()
         deepx = self.image_encoder(x)  # 256*1024  
         deepx = deepx[0].permute(0, 2, 1).view(b, 1024, 32, 32)
@@ -458,5 +527,51 @@ class UNetFormer(nn.Module):
         res2 = self.fpn2(deepx)
         res3 = self.fpn3(deepx)
         res4 = self.fpn4(deepx)
-        x = self.decoder(res1, res2, res3, res4, h, w)
-        return x
+
+        _hypercorr_encoded = MGFEModule.update_feature_one(res1, mask)
+        res1 = torch.concat([res1, _hypercorr_encoded], dim=1)
+        res1 = self.decoder1(res1)
+
+        feat_map = self.decoder(res1, res2, res3, res4, h, w)
+
+
+
+        upsample_size = (feat_map.size(-1) * 2,) * 2
+        feat_map = F.interpolate(feat_map, upsample_size,
+                                          mode='bilinear', align_corners=True)
+
+        x_background = self.segmentation_head(feat_map)
+        x_background = F.interpolate(x_background, size=(h, w), mode='bilinear', align_corners=False)
+
+        x_piexl = self.segmentation_head_piexl(feat_map)
+        x_pre = F.interpolate(x_piexl, size=(h, w), mode='bilinear', align_corners=False)
+
+        feat_map = F.interpolate(feat_map, size=(h, w), mode='bilinear', align_corners=False)
+        context = self.spatial_gather_module(feat_map, x_pre) #8*128*150*1
+        x_piexl = self.lgc(feat_map, context)+feat_map
+        x_piexl = self.segmentation_head_piexl(x_piexl)
+        # 遍历该图的所有mask
+
+        # _, d, W_feat, H_feat = feat_map.shape
+        # _,n,_,_ =mask.shape
+        # mask_float = mask.float()
+        # mask_interp = nn.functional.interpolate(
+        #     mask_float, 
+        #     size=(W_feat, H_feat),  # 对齐特征图尺寸
+        #     mode='bilinear',        # 双线性插值（适合mask）
+        #     align_corners=False     # 避免边缘失真，推荐设置
+        # )
+        # feat_map = feat_map.detach()
+        # mask_expand = mask_interp.unsqueeze(2)  # 维度变为 B×3×1×W×H
+        # feat_map_expand = feat_map.unsqueeze(1)  # 维度变为 B×1×d×W×H
+        # masked_feat = feat_map_expand * mask_expand  # 核心逻辑保留，仅维度适配
+        # masked_feat_flat = masked_feat.reshape(b*n, d, W_feat, H_feat)  # 展平mask通道和batch
+        # ins_feat_flat = self.avg_pool(masked_feat_flat).squeeze()  # (B×3)×d（squeeze后去掉1×1维度）
+        # logits_flat = self.classifier(ins_feat_flat)  # (B×3)×num_classes
+        # logits = logits_flat.reshape(b, n, -1)  # -1自动匹配num_classes
+        # logits = logits.squeeze()
+
+        return x_piexl, x_background,x_pre
+    
+
+
