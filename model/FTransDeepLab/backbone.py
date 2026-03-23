@@ -490,7 +490,7 @@ class MixVisionTransformer(nn.Module):
         x = x.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         outs.append(x)
 
-        return outs,Hs,Ws
+        return outs
 
 class mit_b0(MixVisionTransformer):
     def __init__(self, pretrained = False):
@@ -500,7 +500,7 @@ class mit_b0(MixVisionTransformer):
             drop_rate=0.0, drop_path_rate=0.1)
         if pretrained:
             print("Load backbone weights")
-            self.load_state_dict(torch.load("model_data/segformer_b0_backbone_weights.pth"), strict=False)
+            self.load_state_dict(torch.load("./weights/segformer_b0_weights.pth"), strict=False)
 
 class mit_b1(MixVisionTransformer):
     def __init__(self, pretrained = False):
