@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from timm.models.vision_transformer import Attention
 from einops import rearrange, repeat
-from timm.models.segformer import Segformer, MiT_B2
+from .backbone import mit_b2
 
 # 重叠补丁嵌入（Overlap Patch Embedding）- 论文Stacked Segformer核心组件
 class OverlapPatchEmbed(nn.Module):
@@ -56,7 +56,6 @@ class StackedSegformerEncoder(nn.Module):
             patch_embed = OverlapPatchEmbed(
                 patch_size=patch_params[i][0],
                 stride=patch_params[i][1],
-                padding=patch_params[i][2],
                 in_chans=in_chans if i==0 else embed_dims[i-1],
                 embed_dim=embed_dims[i]
             )
@@ -64,14 +63,19 @@ class StackedSegformerEncoder(nn.Module):
             blocks = nn.Sequential(*[SegformerBlock(embed_dims[i], num_heads[i]) for _ in range(depths[i])])
             self.stages.append(nn.ModuleDict({'patch_embed': patch_embed, 'blocks': blocks}))
         # 加载MiT-B2预训练权重（论文实验设置）
-        self._init_pretrained(MiT_B2(pretrained=True))
+        self._init_pretrained(mit_b2(pretrained=True))
 
     def _init_pretrained(self, pretrained_model):
-        # 对齐预训练权重与自定义模块
-        for i, stage in enumerate(self.stages):
-            stage['patch_embed'].proj.load_state_dict(pretrained_model.stages[i].patch_embed.proj.state_dict())
-            stage['patch_embed'].norm.load_state_dict(pretrained_model.stages[i].patch_embed.norm.state_dict())
-            stage['blocks'].load_state_dict(pretrained_model.stages[i].blocks.state_dict())
+       for i in range(4):
+        # 加载 patch_embed（官方 → 你的模型）
+        self.stages[i]['patch_embed'].load_state_dict(
+            pretrained_model.patch_embeds[i].state_dict()
+        )
+        
+        # 加载 blocks（官方的是 ModuleList，你的是 Sequential，可直接加载）
+        self.stages[i]['blocks'].load_state_dict(
+            pretrained_model.blocks[i].state_dict()
+        )
 
     def forward(self, x):
         feats = []  # 保存4个阶段的特征
@@ -188,12 +192,12 @@ class MFF(nn.Module):
         return fused
     
 class FTransDeepLab(nn.Module):
-    def __init__(self, num_classes=6, in_chans=3, embed_dims=[64, 128, 320, 512]):
+    def __init__(self, num_classes=6, in_chans=3, embed_dims=[32, 64, 160, 256]):
         super().__init__()
         self.num_classes = num_classes
         # 双模态Segformer编码器（IRRG和nDSM各一个）
-        self.encoder_irrg = StackedSegformerEncoder(in_chans=in_chans, embed_dims=embed_dims)
-        self.encoder_ndsm = StackedSegformerEncoder(in_chans=in_chans, embed_dims=embed_dims)
+        self.encoder_irrg = mit_b2(pretrained=True)
+        self.encoder_ndsm = mit_b2(pretrained=True)
         # 4个阶段的MFR+MFF模块（对应编码器4个阶段输出）
         self.mfr_blocks = nn.ModuleList([MFR(dim) for dim in embed_dims])
         self.mff_blocks = nn.ModuleList([MFF(dim) for dim in embed_dims])
@@ -215,18 +219,18 @@ class FTransDeepLab(nn.Module):
             nn.Conv2d(embed_dims[-1], embed_dims[-1], 1, padding=0, bias=False),
             nn.BatchNorm2d(embed_dims[-1]),
             nn.ReLU(inplace=True),
-            nn.Upsample(scale_factor=16, mode='bilinear', align_corners=False)
         )
-        # 低维特征融合+上采样
         self.fuse_low = nn.Sequential(
             nn.Conv2d(embed_dims[0] + embed_dims[-1], embed_dims[0], 3, padding=1, bias=False),
             nn.BatchNorm2d(embed_dims[0]),
             nn.ReLU(inplace=True)
         )
-        self.upsample = nn.Upsample(scale_factor=4, mode='bilinear', align_corners=False)
+
+        self.upsample = nn.Upsample(scale_factor=8, mode='bilinear', align_corners=False)
         self.final_conv = nn.Conv2d(embed_dims[0], num_classes, 1)
 
-    def forward(self, x_irrg, x_ndsm):
+    def forward(self, x_irrg, x_ndsm,boundary,ufzs):
+        x_ndsm=x_ndsm.repeat(1, 3, 1, 1)
         # 双模态编码器前向
         feats_irrg, Hs, Ws = self.encoder_irrg(x_irrg)
         feats_ndsm, _, _ = self.encoder_ndsm(x_ndsm)
@@ -234,20 +238,31 @@ class FTransDeepLab(nn.Module):
         # 逐阶段MFR+MFF特征校正与融合
         for i in range(4):
             # 恢复编码器输出为2D特征图
-            feat_irrg = rearrange(feats_irrg[i], 'b (h w) c -> b c h w', h=Hs[i], w=Ws[i])
-            feat_ndsm = rearrange(feats_ndsm[i], 'b (h w) c -> b c h w', h=Hs[i], w=Ws[i])
+            feat_irrg =feats_irrg[i] #rearrange(feats_irrg[i], 'b (h w) c -> b c h w', h=Hs[i], w=Ws[i])
+            feat_ndsm =feats_ndsm[i] #rearrange(feats_ndsm[i], 'b (h w) c -> b c h w', h=Hs[i], w=Ws[i])
             # MFR校正
             rf_irrg, rf_ndsm = self.mfr_blocks[i](feat_irrg, feat_ndsm)
             # MFF融合
             fused_feat = self.mff_blocks[i](rf_irrg, rf_ndsm)
             fused_feats.append(fused_feat)
-        # DeepLabv3+解码：ASPP处理最高维特征
-        x = self.aspp(fused_feats[-1])
-        # 融合最低维特征（论文解码器策略）
-        low_feat = F.interpolate(fused_feats[0], size=x.shape[2:], mode='bilinear', align_corners=False)
-        x = torch.cat([x, low_feat], dim=1)
+        high_feat = fused_feats[-1]  # [B,512,16,16]
+        aspp_out = self.aspp(high_feat)
+        
+        # 把全局池化的1x1 上采样回 16x16
+        aspp_out = F.interpolate(aspp_out, size=high_feat.shape[2:], mode='bilinear', align_corners=False)
+
+        # 高层 -> 上采样 4x → 64x64
+        aspp_out = F.interpolate(aspp_out, scale_factor=4, mode='bilinear', align_corners=False)
+
+        # 低层 (128x128) -> 下采样 1/2 → 64x64
+        low_feat = fused_feats[0]
+        low_feat = F.interpolate(low_feat, scale_factor=0.5, mode='bilinear', align_corners=False)
+
+        # 融合
+        x = torch.cat([aspp_out, low_feat], dim=1)
         x = self.fuse_low(x)
-        # 上采样恢复输入尺寸+分类
+
+        # 64x64 → 上采样 8x → 512x512
         x = self.upsample(x)
         x = self.final_conv(x)
-        return x
+        return x,1
