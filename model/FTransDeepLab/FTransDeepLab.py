@@ -80,35 +80,53 @@ class MFR(nn.Module):
 
 # 🔥 轻量化MFF（减少头数、去掉冗余计算）
 class MFF(nn.Module):
-    def __init__(self, dim, num_heads=2):  # 🔥 从8→2个头
+    def __init__(self, dim, num_heads=1):  # 🔥 直接改成 1 头，提速最大
         super().__init__()
         self.dim = dim
         self.num_heads = num_heads
-        self.head_dim = dim // num_heads if dim >= num_heads else dim
+        self.head_dim = dim  # 🔥 单头 = 直接全维度，不切分
+        
+        # 🔥 轻量 QKV
         self.qkv = nn.Linear(dim, dim * 3)
+        
+        # 🔥 降维投影，减少计算
         self.proj = nn.Linear(dim * 2, dim)
         self.softmax = nn.Softmax(dim=-1)
 
     def cross_attention(self, q1, k2, v2):
+        # 单头注意力，维度最简单，最快
         q1 = rearrange(q1, 'b n (h d) -> b h n d', h=self.num_heads)
         k2 = rearrange(k2, 'b n (h d) -> b h d n', h=self.num_heads)
         v2 = rearrange(v2, 'b n (h d) -> b h n d', h=self.num_heads)
+        
         attn = self.softmax(torch.matmul(q1, k2) / (self.head_dim ** 0.5))
         return rearrange(torch.matmul(attn, v2), 'b h n d -> b n (h d)')
 
     def forward(self, x_irrg, x_ndsm):
         b, c, h, w = x_irrg.shape
+        
+        # 展平
         x1 = rearrange(x_irrg, 'b c h w -> b (h w) c')
         x2 = rearrange(x_ndsm, 'b c h w -> b (h w) c')
+        
+        # QKV 计算
         q1, k1, v1 = self.qkv(x1).chunk(3, dim=-1)
         q2, k2, v2 = self.qkv(x2).chunk(3, dim=-1)
+        
+        # 交叉注意力
         cro1 = self.cross_attention(q1, k2, v2)
         cro2 = self.cross_attention(q2, k1, v1)
+        
+        # 残差 + 融合
         of1 = x1 + self.proj(torch.cat([x1, cro1], dim=-1))
         of2 = x2 + self.proj(torch.cat([x2, cro2], dim=-1))
+        
+        # 最终融合
         fused = self.proj(torch.cat([of1, of2], dim=-1))
+        
+        # 恢复形状
         return rearrange(fused, 'b (h w) c -> b c h w', h=h, w=w)
-
+    
 # # 🔥 主模型：极致轻量化
 # class FTransDeepLab(nn.Module):
 #     def __init__(self, num_classes=6, embed_dims=[32, 64, 160, 256]):  # 🔥 通道全部减半
@@ -166,7 +184,8 @@ class FTransDeepLab(nn.Module):
         # 🔥 超级提速：共享权重编码器！（速度直接 ×2）
         # 原来：两个独立 mit_b0 → 现在：共用一个
         # ======================
-        self.encoder = mit_b0(pretrained=True)  
+        self.encoder_irrg = mit_b0(pretrained=True)
+        self.encoder_ndsm = mit_b0(pretrained=True)
 
         # 轻量级通道融合，替代巨慢的 MFR + MFF
         self.fuse_blocks = nn.ModuleList([
@@ -192,26 +211,28 @@ class FTransDeepLab(nn.Module):
             nn.BatchNorm2d(64),
             nn.ReLU(inplace=True)
         )
+
+        self.mfr_blocks = nn.ModuleList([MFR(d) for d in embed_dims])
+        self.mff_blocks = nn.ModuleList([MFF(d, num_heads=2) for d in embed_dims])
         
         # 减少上采样次数
         self.upsample = nn.Upsample(scale_factor=4, mode='nearest')  # 最近邻 = 巨快
         self.final_conv = nn.Conv2d(64, num_classes, 1)
 
-    def forward(self, x_irrg, x_ndsm,boundary=None, ufzs=None):
+    def forward(self, x_irrg, x_ndsm,boundary=None, ufzs=None,geo_instance=None):
         # 高程图复制3通道
         x_ndsm = x_ndsm.repeat(1, 3, 1, 1)
         
         # ======================
         # 🔥 速度翻倍：共享编码器
         # ======================
-        feats_irrg = self.encoder(x_irrg)
-        feats_ndsm = self.encoder(x_ndsm)
+        feats_irrg = self.encoder_irrg(x_irrg)
+        feats_ndsm = self.encoder_ndsm(x_ndsm)
 
         fused_feats = []
         for i in range(4):
-            # 拼接 + 1x1 卷积融合（比 MFR/MFF 快 10 倍）
-            feat = torch.cat([feats_irrg[i], feats_ndsm[i]], dim=1)
-            fused_feats.append(self.fuse_blocks[i](feat))
+            firr, fnd = self.mfr_blocks[i](feats_irrg[i], feats_ndsm[i])
+            fused_feats.append(self.mff_blocks[i](firr, fnd))
 
         # 极简解码
         high = fused_feats[-1]

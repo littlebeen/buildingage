@@ -22,13 +22,13 @@ if MODEL == 'Dino_mask':
     from model.singleDino.singleDino_single_building_mask import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'Dino_instance':
-    from model.singleDino.singleDino_single_instance import UNetFormer as singleDino
+    from model.singleDino.singleDino_single_building_instance import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'Dino_improve':
     from model.singleDino.singleDino_single_building_improve import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'Dino_moe':
-    from model.singleDino.singleDino_single_moe import UNetFormer as singleDino
+    from model.singleDino.singleDino_single_building_moe import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'Dino_height':
     from model.singleDino.singleDino_single_building_height import UNetFormer as singleDino
@@ -213,7 +213,7 @@ def test(net, first=False,loader = val_loader,epoch=100):
     with torch.no_grad():
         for batch_idx, (data, mask, height,ufzs, target,boundary,geo_instance, label_year) in enumerate(loader):
             data, mask,height,ufzs, target,boundary,geo_instance, label_year = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda()),Variable(geo_instance.cuda()), Variable(label_year.cuda())
-            output = net(data, height, boundary, ufzs)
+            output = net(data, height, boundary, ufzs,geo_instance)
             class_indices = get_result(output[0])
             # if batch_idx%10==0:
             #     print(batch_idx)
@@ -388,7 +388,7 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
         for batch_idx, (data, mask, height,ufzs, target,boundary,geo_instance,label_year) in enumerate(train_loader):
             data,height,ufzs, target,boundary,geo_instance = Variable(data.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda()),Variable(geo_instance.cuda())
             optimizer.zero_grad()
-            output = net(data, height, boundary, ufzs)
+            output = net(data, height, boundary, ufzs,geo_instance)
             loss = loss_calculate(output, target,boundary,e)
             loss.backward()
             #total_grad_norm = get_total_grad_norm(net)

@@ -148,7 +148,7 @@ class Hongkong_dataset(torch.utils.data.Dataset):
     
     def generate_instance_mask(self,mask,min_count_threshold=200):
         mask_flat = mask.flatten()
-        geo_instance=np.zeros((50,3))
+        geo_instance=np.zeros((50,4),dtype=np.float32)
         unique_ids, counts = np.unique(mask_flat, return_counts=True)
         
         # Step 2: 构建「原ID→出现次数」字典（排除0，0默认是背景）
