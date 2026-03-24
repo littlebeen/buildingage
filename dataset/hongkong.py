@@ -9,36 +9,6 @@ from config import convert_to_color,save_img
 from scipy.stats import mode
 import albumentations as A
 
-def generate_instance_mask(mask,min_count_threshold=200):
-    mask_flat = mask.flatten()
-    unique_ids, counts = np.unique(mask_flat, return_counts=True)
-    
-    # Step 2: 构建「原ID→出现次数」字典（排除0，0默认是背景）
-    id_count_dict = dict(zip(unique_ids, counts))
-    
-    # Step 3: 筛选保留的实例（次数≥阈值，且原ID≠0）
-    retained_ids = [
-        id_ for id_ in unique_ids 
-        if id_ != 0 and id_count_dict[id_] >= min_count_threshold
-    ]
-    
-    # Step 4: 构建重编码映射表（原ID→新ID，从1开始连续编号）
-    id_mapping = {0: 0}  # 背景0保持不变
-    for new_id, old_id in enumerate(retained_ids, start=1):
-        id_mapping[old_id] = new_id
-    
-    # Step 5: 低频实例归为0（未出现在retained_ids中的非0ID）
-    for old_id in unique_ids:
-        if old_id != 0 and old_id not in retained_ids:
-            id_mapping[old_id] = 0
-    
-    # Step 6: 应用映射表，生成重编码后的mask
-    # 用np.vectorize高效替换值（支持任意维度）
-    vectorized_mapping = np.vectorize(lambda x: id_mapping[x])
-    reencoded_mask = vectorized_mapping(mask)
-    
-    
-    return reencoded_mask, len(retained_ids)
 
 
 def generate_first_impervious_year(imperv_data):
@@ -137,7 +107,16 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         # for f in self.data_files + self.label_files:
         #     if not os.path.isfile(f):
         #         raise KeyError('{} is not a file !'.format(f))
-
+        self.csv_data=[]
+        with open('../dataset/hk_building_age/building_area.csv', 'r', encoding='utf-8') as f:
+            # 读取每一行
+            lines = f.readlines()
+            # 去掉换行符，按逗号分割
+            for line in lines[1:]:
+                row = line.strip().split(',')
+                row_num = [float(val) for val in row[1:]]
+                self.csv_data.append(row_num)
+        self.csv_np = np.array(self.csv_data, dtype=np.float32)
 
     def __len__(self):
         # Default epoch size is 10 000 samples
@@ -166,6 +145,58 @@ class Hongkong_dataset(torch.utils.data.Dataset):
             results.append(np.copy(array))
 
         return tuple(results)
+    
+    def generate_instance_mask(self,mask,min_count_threshold=200):
+        mask_flat = mask.flatten()
+        geo_instance=np.zeros((50,3))
+        unique_ids, counts = np.unique(mask_flat, return_counts=True)
+        
+        # Step 2: 构建「原ID→出现次数」字典（排除0，0默认是背景）
+        id_count_dict = dict(zip(unique_ids, counts))
+        
+        # Step 3: 筛选保留的实例（次数≥阈值，且原ID≠0）
+        retained_ids = [
+            id_ for id_ in unique_ids 
+            if id_ != 0 and id_count_dict[id_] >= min_count_threshold
+        ]
+        
+        # Step 4: 构建重编码映射表（原ID→新ID，从1开始连续编号）
+        id_mapping = {0: 0}  # 背景0保持不变
+        for new_id, old_id in enumerate(retained_ids, start=1):
+            geo_instance[new_id-1] =self.csv_data[old_id-1]
+            id_mapping[old_id] = new_id
+        
+        # Step 5: 低频实例归为0（未出现在retained_ids中的非0ID）
+        for old_id in unique_ids:
+            if old_id != 0 and old_id not in retained_ids:
+                id_mapping[old_id] = 0
+        
+        # Step 6: 应用映射表，生成重编码后的mask
+        # 用np.vectorize高效替换值（支持任意维度）
+        vectorized_mapping = np.vectorize(lambda x: id_mapping[x])
+        reencoded_mask = vectorized_mapping(mask)
+        
+        
+        return reencoded_mask,geo_instance, len(retained_ids)
+    
+    def extract_instance_masks(self,instance_id_tensor) -> dict:
+        """
+        从W×H的instance ID张量中，提取每个instance的二值mask
+        :param instance_id_tensor: 形状(W, H)的tensor，像素值=instance编号（从0开始）
+        :return: 字典，key=instance编号，value=对应二值mask（W×H的bool tensor，1=该instance区域）
+        """
+        # 1. 获取图中所有非重复的instance编号（排除全0背景，若0是背景则过滤，否则保留）
+        unique_ids = np.unique(instance_id_tensor)
+        # 备注：若0是背景（无意义instance），则过滤：
+        unique_ids = unique_ids[unique_ids != -1]
+        
+        # 2. 向量化提取每个instance的二值mask（无循环）
+        instance_masks = []
+        for ins_id in unique_ids:
+            # 生成该instance的二值mask：像素值==ins_id的位置为True
+            mask = (instance_id_tensor == ins_id)
+            instance_masks.append(mask)
+        return instance_masks
 
     def __getitem__(self, i):
         name=self.data_files[i].split('/')[-1].split('.')[0].replace('image', '')
@@ -202,11 +233,11 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         boundary = boundary.astype(np.int64)
         zero_mask = (label_id == 0)
         boundary[zero_mask] = 0
-        boundary, instance_num = generate_instance_mask(boundary)
+        boundary, geo_instance,instance_num = self.generate_instance_mask(boundary)
 
 
         boundary = boundary-1 #整张图的instance mask 从-1开始
-        instances = extract_instance_masks(boundary) #转换为instance mask
+        instances = self.extract_instance_masks(boundary) #转换为instance mask
         label_id[boundary == -1] = 0
         # instances_class=get_mask_classes(instances,label_id) #获得所有instance
         # random_int = random.randint(0, len(instances)-1)
@@ -237,6 +268,7 @@ class Hongkong_dataset(torch.utils.data.Dataset):
                     torch.from_numpy(ufzs),
                     torch.from_numpy(label_id)-1,
                     torch.from_numpy(boundary),
+                    torch.from_numpy(geo_instance),
                     torch.from_numpy(label) #具体的年份，train的时候无用
                     )
         else:
@@ -247,28 +279,10 @@ class Hongkong_dataset(torch.utils.data.Dataset):
                     torch.from_numpy(ufzs),
                     torch.from_numpy(label_id)-1,
                     torch.from_numpy(boundary),
+                    torch.from_numpy(geo_instance),
                     torch.from_numpy(label)
                     )
 
-def extract_instance_masks(instance_id_tensor) -> dict:
-    """
-    从W×H的instance ID张量中，提取每个instance的二值mask
-    :param instance_id_tensor: 形状(W, H)的tensor，像素值=instance编号（从0开始）
-    :return: 字典，key=instance编号，value=对应二值mask（W×H的bool tensor，1=该instance区域）
-    """
-    # 1. 获取图中所有非重复的instance编号（排除全0背景，若0是背景则过滤，否则保留）
-    unique_ids = np.unique(instance_id_tensor)
-    # 备注：若0是背景（无意义instance），则过滤：
-    unique_ids = unique_ids[unique_ids != -1]
-    
-    # 2. 向量化提取每个instance的二值mask（无循环）
-    instance_masks = []
-    for ins_id in unique_ids:
-        # 生成该instance的二值mask：像素值==ins_id的位置为True
-        mask = (instance_id_tensor == ins_id)
-        instance_masks.append(mask)
-    
-    return instance_masks
 
 
 def get_mask_classes(mask, label) -> np.ndarray:

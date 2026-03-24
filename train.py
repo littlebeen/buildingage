@@ -5,7 +5,7 @@ torch.cuda.device_count()
 import torch.optim as optim
 from torch.autograd import Variable
 from IPython.display import clear_output
-from config import convert_to_color, mse_rmse, DATASET,save_img,metrics,metrics_sinple,WeightedOrdinalLoss,accuracy,N_CLASSES,WINDOW_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL,loss_calc_only_instance,loss_calculate,PRETRAIN
+from config import convert_to_color, mse_rmse, DATASET,save_img,metrics,metrics_sinple,accuracy,N_CLASSES,WINDOW_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL,loss_calc_only_instance,loss_calculate,PRETRAIN
 from dataset import get_dataloader
 import os
 from kmean import generate_image
@@ -21,8 +21,14 @@ if MODEL == 'Dino':
 if MODEL == 'Dino_mask':
     from model.singleDino.singleDino_single_building_mask import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
-if MODEL == 'Dino_ufz_height':
+if MODEL == 'Dino_instance':
+    from model.singleDino.singleDino_single_instance import UNetFormer as singleDino
+    net = singleDino(num_classes=N_CLASSES).cuda()
+if MODEL == 'Dino_improve':
     from model.singleDino.singleDino_single_building_improve import UNetFormer as singleDino
+    net = singleDino(num_classes=N_CLASSES).cuda()
+if MODEL == 'Dino_moe':
+    from model.singleDino.singleDino_single_moe import UNetFormer as singleDino
     net = singleDino(num_classes=N_CLASSES).cuda()
 if MODEL == 'Dino_height':
     from model.singleDino.singleDino_single_building_height import UNetFormer as singleDino
@@ -78,8 +84,9 @@ if MODEL == 'FTransDeepLab':
 
 params = 0
 for name, param in net.named_parameters():
-    params += param.nelement()
-print(params)
+    if param.requires_grad:  # 只看可学习的
+        params += param.nelement()
+print(params / 1e6,'M')
 
 # Load the datasets
 train_set = get_dataloader(DATASET, 'train')
@@ -127,6 +134,15 @@ def get_result(output,threshold=0.5):
         output = output.unsqueeze(0)
     class_indices = torch.argmax(output, dim=1)
     return class_indices
+
+def get_instance_result(logits):
+    """
+    logits: [B, num_bins]
+    return: age_classes [B]  (0~K-1)
+    """
+    probs = torch.sigmoid(logits)
+    age_classes = torch.sum(probs > 0.5, dim=1)
+    return age_classes
 
 def get_instance_metric(pred_instance, instance_label,instance_year, label):
     pred_instance= pred_instance.permute(0,2,3,1) # [1,H,W,C]
@@ -195,8 +211,8 @@ def test(net, first=False,loader = val_loader,epoch=100):
     feature_list = []
     labels = []
     with torch.no_grad():
-        for batch_idx, (data, mask, height,ufzs, target,boundary, label_year) in enumerate(loader):
-            data, mask,height,ufzs, target,boundary, label_year = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda()), Variable(label_year.cuda())
+        for batch_idx, (data, mask, height,ufzs, target,boundary,geo_instance, label_year) in enumerate(loader):
+            data, mask,height,ufzs, target,boundary,geo_instance, label_year = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda()),Variable(geo_instance.cuda()), Variable(label_year.cuda())
             output = net(data, height, boundary, ufzs)
             class_indices = get_result(output[0])
             # if batch_idx%10==0:
@@ -212,7 +228,7 @@ def test(net, first=False,loader = val_loader,epoch=100):
                     #save_img(height[item], main_dir, name = "height_{}".format(batch_idx))
             instance_num,correct,all_building_year = get_instance_metric(output[0], mask[0],label_year, target)
             if torch.is_tensor(output[1]):
-                correct = get_result(output[1]).cpu()
+                correct = get_instance_result(output[1]).cpu()
 
             # mask_list.append(boundary.cpu())
             # feature_list.append(output[1].cpu())
@@ -363,15 +379,14 @@ def train(net, optimizer, epochs,test_function,  scheduler=None, weights=WEIGHTS
     weights = weights.cuda()
 
     iter_ = 0
-    criterionor = WeightedOrdinalLoss(num_classes = N_CLASSES)
     for e in range(1, epochs + 1):
         if e == 1:
             test_function(net, first=True)
         if scheduler is not None:
             scheduler.step()
         net.train()
-        for batch_idx, (data, mask, height,ufzs, target,boundary,label_year) in enumerate(train_loader):
-            data,height,ufzs, target,boundary = Variable(data.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda())
+        for batch_idx, (data, mask, height,ufzs, target,boundary,geo_instance,label_year) in enumerate(train_loader):
+            data,height,ufzs, target,boundary,geo_instance = Variable(data.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda()),Variable(geo_instance.cuda())
             optimizer.zero_grad()
             output = net(data, height, boundary, ufzs)
             loss = loss_calculate(output, target,boundary,e)
