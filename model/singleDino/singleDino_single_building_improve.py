@@ -412,237 +412,12 @@ class TriModalAttentionFusion(nn.Module):
             nn.Conv2d(dim, 3, 1),
             nn.Softmax(dim=1)
         )
-    def forward(self, img, depth, lulc):
+    def forward(self, img, depth, lulc,modality_mask):
         weight = self.attention(torch.cat([img, depth, lulc], dim=1))
         img_w = weight[:,0:1,:,:] * img
         depth_w = weight[:,1:2,:,:] * depth
         lulc_w = weight[:,2:3,:,:] * lulc
         return self.norm(img_w + depth_w + lulc_w)
-#模态合并v2  
-class TriModalCrossAttentionFusion(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.dim = dim
-
-        # 三个模态投影
-        self.proj_img = nn.Conv2d(dim, dim, 1)
-        self.proj_dsm = nn.Conv2d(dim, dim, 1)
-        self.proj_lulc = nn.Conv2d(dim, dim, 1)
-
-        # 🌟 LULC 置信门控（核心：自动学习是否信任LULC特征）
-        self.lulc_gate = nn.Sequential(
-            nn.Conv2d(dim, dim, 1),
-            nn.Sigmoid()  # 输出 0~1，自动抑制无效特征
-        )
-
-        # Cross-Attention 主体
-        self.q = nn.Conv2d(dim, dim, 1)
-        self.k = nn.Conv2d(dim, dim, 1)
-        self.v = nn.Conv2d(dim, dim, 1)
-        self.proj_out = nn.Conv2d(dim, dim, 1)
-
-        self.norm = LayerNorm2d(dim)
-
-    def forward(self, img, depth, lulc):
-        # 步骤1：特征投影
-        img = self.proj_img(img)
-        dsm = self.proj_dsm(depth)
-        lulc = self.proj_lulc(lulc)
-
-        # 🌟 步骤2：LULC置信门控（核心！）
-        # 模型自动学习：无效LULC → 权重趋近0
-        lulc_weight = self.lulc_gate(lulc)
-        lulc = lulc * lulc_weight
-
-        # 步骤3：多模态上下文融合
-        ctx = dsm + lulc
-
-        # 步骤4：Cross-Attention
-        B, C, H, W = img.shape
-        q = self.q(img).flatten(2).transpose(1, 2)
-        k = self.k(ctx).flatten(2).transpose(1, 2)
-        v = self.v(ctx).flatten(2).transpose(1, 2)
-
-        attn = torch.matmul(q, k.transpose(-2, -1)) / (C ** 0.5)
-        attn = attn.softmax(dim=-1)
-        fused = torch.matmul(attn, v).transpose(1, 2).view(B, C, H, W)
-        fused = self.proj_out(fused)
-
-        # 残差 + 归一化
-        out = self.norm(img + fused)
-        return out
-#模态合并v3     
-class CosGuidedMoECrossAttentionFusion_Robust_Lite(nn.Module):
-    def __init__(self, dim, num_experts=2, dropout=0.0):
-        super().__init__()
-        self.dim = dim
-        self.num_experts = num_experts
-
-        # 输入投影
-        self.proj_img = nn.Conv2d(dim, dim, 1)
-        self.proj_dsm = nn.Conv2d(dim, dim, 1)
-        self.proj_lulc = nn.Conv2d(dim, dim, 1)
-
-        # 模态门控
-        self.gate_dsm = nn.Sequential(nn.Conv2d(dim, dim, 1), nn.Sigmoid())
-        self.gate_lulc = nn.Sequential(nn.Conv2d(dim, dim, 1), nn.Sigmoid())
-
-        # ======================
-        # 🔥 单头 Cross Attention 专家（无多头！无num_heads！）
-        # ======================
-        self.experts = nn.ModuleList([
-            nn.ModuleDict({
-                "q_proj": nn.Conv2d(dim, dim, 1),   # Q: img
-                "kv_proj": nn.Conv2d(dim, dim * 2, 1), # K,V: ctx
-                "out_proj": nn.Conv2d(dim, dim, 1),
-            }) for _ in range(num_experts)
-        ])
-
-        # MoE门控
-        self.gate_net = nn.Sequential(
-            nn.Conv2d(dim * 3 + 3, dim // 2, 1),
-            nn.GELU(),
-            nn.Conv2d(dim // 2, num_experts, 1),
-            nn.AdaptiveAvgPool2d(1),
-            nn.Softmax(dim=1)
-        )
-
-        self.norm = LayerNorm2d(dim)
-
-    def forward(self, img, dsm, lulc, modality_mask):
-        B, C, H, W = img.shape
-        device = img.device
-
-        # 模态掩码
-        ones_b1 = torch.ones(B, 1, device=device)
-        dsm_tensor = torch.bernoulli(torch.full((B, 1), 0.7, device=device))
-        modality_mask = torch.cat([ones_b1, dsm_tensor, modality_mask], dim=1)
-        mask_spatial = modality_mask.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, H, W)
-        mask_dsm = mask_spatial[:, 1:2]
-        mask_lulc = mask_spatial[:, 2:3]
-
-        # 投影 + 掩码
-        img = self.proj_img(img)
-        dsm = self.proj_dsm(dsm) * mask_dsm
-        lulc = self.proj_lulc(lulc) * mask_lulc
-        dsm = dsm * self.gate_dsm(dsm)
-        lulc = lulc * self.gate_lulc(lulc)
-        ctx = dsm + lulc
-
-        # 余弦引导
-        has_aux = (modality_mask[:, 1] + modality_mask[:, 2]).clamp(0, 1).view(B,1,1,1)
-        cos_sim = F.cosine_similarity(img.flatten(2), ctx.flatten(2), dim=1).view(B,1,H,W) * has_aux
-        cos_guide = cos_sim.flatten(2)  # [B, 1, HW]
-
-        # MoE门控
-        gate_in = torch.cat([img, dsm, lulc, mask_spatial.float()], dim=1)
-        g = self.gate_net(gate_in)
-
-        # ======================
-        # 🔥 核心：纯单头 Cross Attention（无多头！）
-        # ======================
-        def attn(q, k, v, guide):
-            # 输入: [B,C,H,W]
-            q = q.flatten(2)          # [B, C, HW]
-            k = k.flatten(2)          # [B, C, HW]
-            v = v.flatten(2)          # [B, C, HW]
-
-            # 单头交叉注意力
-            attn_score = torch.matmul(q.transpose(1,2), k) * (self.dim ** -0.5)
-            attn_score = attn_score + guide
-            attn_score = attn_score.softmax(dim=-1)
-
-            out = torch.matmul(v, attn_score.transpose(1,2))  # [B, C, HW]
-            return out.view(B, C, H, W)  # ✅ 正确形状
-
-        # 专家融合
-        fused = 0
-        for i, exp in enumerate(self.experts):
-            q = exp["q_proj"](img)
-            k, v = exp["kv_proj"](ctx).chunk(2, 1)
-            o = attn(q, k, v, cos_guide)
-            o = exp["out_proj"](o)
-            fused = fused + g[:,i:i+1] * o
-
-        out = self.norm(img + fused)
-        return out
-#模态融合v4无cross attention    
-class CosGuidedMoEFusion(nn.Module):
-    def __init__(self, dim, num_experts=4, dropout=0.0):
-        super().__init__()
-        self.dim = dim
-        self.num_experts = num_experts
-
-        # 输入投影
-        self.proj_img = nn.Conv2d(dim, dim, 1)
-        self.proj_dsm = nn.Conv2d(dim, dim, 1)
-        self.proj_lulc = nn.Conv2d(dim, dim, 1)
-
-        # 模态门控
-        self.gate_dsm = nn.Sequential(nn.Conv2d(dim, dim, 1), nn.Sigmoid())
-        self.gate_lulc = nn.Sequential(nn.Conv2d(dim, dim, 1), nn.Sigmoid())
-
-        # ======================
-        # 🔥 单头 Cross Attention 专家（无多头！无num_heads！）
-        # ======================
-        self.experts = nn.ModuleList([
-            nn.Sequential(
-                nn.Conv2d(dim * 2, dim, 3, padding=1),
-                nn.GELU(),
-                nn.Conv2d(dim, dim, 3, padding=1),
-            ) for _ in range(num_experts)
-        ])
-
-        # MoE门控
-        self.gate_net = nn.Sequential(
-            nn.Conv2d(dim * 3 + 3, dim // 2, 1),
-            nn.GELU(),
-            nn.Conv2d(dim // 2, num_experts, 1),
-            nn.AdaptiveAvgPool2d(1),
-            nn.Softmax(dim=1)
-        )
-
-        self.norm = LayerNorm2d(dim)
-
-    def forward(self, img, dsm, lulc, modality_mask):
-        B, C, H, W = img.shape
-        device = img.device
-
-        # 模态掩码
-        ones_b1 = torch.ones(B, 1, device=device)
-        dsm_tensor = torch.bernoulli(torch.full((B, 1), 0.7, device=device))
-        modality_mask = torch.cat([ones_b1, dsm_tensor, modality_mask], dim=1)
-        mask_spatial = modality_mask.unsqueeze(-1).unsqueeze(-1).repeat(1, 1, H, W)
-        mask_dsm = mask_spatial[:, 1:2]
-        mask_lulc = mask_spatial[:, 2:3]
-
-        # 投影 + 掩码
-        img = self.proj_img(img)
-        dsm = self.proj_dsm(dsm) * mask_dsm
-        lulc = self.proj_lulc(lulc) * mask_lulc
-        dsm = dsm * self.gate_dsm(dsm)
-        lulc = lulc * self.gate_lulc(lulc)
-        ctx = dsm + lulc
-
-        # 余弦引导
-        has_aux = (modality_mask[:, 1] + modality_mask[:, 2]).clamp(0, 1).view(B,1,1,1)
-        cos_sim = F.cosine_similarity(img.flatten(2), ctx.flatten(2), dim=1).view(B,1,H,W) * has_aux
-        img_guided = img * (1 + cos_sim)  # 余弦引导直接乘进去，简单高效
-
-        # MoE门控
-        gate_in = torch.cat([img, dsm, lulc, mask_spatial.float()], dim=1)
-        g = self.gate_net(gate_in)
-
-
-        # 专家融合
-        fused = 0.0
-        feat = torch.cat([img_guided, ctx], dim=1)  # 引导特征 + 上下文
-        for i, exp in enumerate(self.experts):
-            out = exp(feat)
-            fused = fused + g[:, i:i+1] * out
-
-        out = self.norm(img + fused)
-        return out
         
 class DeformableConvBlock(nn.Module):
     def __init__(self, in_c, out_c):
@@ -716,12 +491,12 @@ class UNetFormer(nn.Module):
         
 
          
-        self.fuse1 = CosGuidedMoEFusion(256)
-        self.fuse2 = CosGuidedMoEFusion(256)
-        self.fuse3 = CosGuidedMoEFusion(256)
-        self.fuse4 = CosGuidedMoEFusion(256)
+        self.fuse1 = TriModalAttentionFusion(256)
+        self.fuse2 = TriModalAttentionFusion(256)
+        self.fuse3 = TriModalAttentionFusion(256)
+        self.fuse4 = TriModalAttentionFusion(256)
 
-    def forward(self, x, depth, masks,ufzs):
+    def forward(self, x, depth, masks,ufzs,geo_instance):
         b, _, h, w = x.size()
         modality_mask = ufzs.flatten(1).all(dim=1, keepdim=True).float()
         depth_feats = self.deep_encoder(depth)

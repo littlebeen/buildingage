@@ -14,10 +14,11 @@ from torch.nn.modules.loss import _Loss, _WeightedLoss
 import matplotlib.pyplot as plt
 
 DATASET = 'hongkong' #amsterdam hongkong global_hongkong
-MODEL = 'FTransDeepLab' #Dino Dino_mask Dino_height Dino_ufz Dino_ufz_height Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet CMT FTransDeepLab Unet
+MODEL = 'Dino_geo' #Dino Dino_improve Dino_moe Dino_moe Dino_geo Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet CMT FTransDeepLab Unet
 #FTransUNet STunet MFNet太慢了
 MODE = 'train'
 PRETRAIN =''
+LOSS = 'ORD'  #ORD SEG
 # Parameters
 ## SwinFusion
 # WINDOW_SIZE = (64, 64) # Patch size
@@ -51,10 +52,6 @@ palette = {-1 : (255, 255, 255), # Undefined (white)
 invert_palette = {v: k for k, v in palette.items()}
 
 
-LOSS = 'SEG'  #ORD
-# LOSS = 'SEG+BDY'
-# LOSS = 'SEG+OBJ'
-# LOSS = 'SEG+BDY+OBJ'
 
 
 def convert_to_color(arr_2d, main_dir,name, palette=palette):
@@ -297,7 +294,10 @@ def loss_calc_instance(pred, label,boundary, weights):
     criterion_piexl = CrossEntropy2d_ignore().cuda()
     piexl_loss = criterion_piexl(pred[0],label,weights)
     instanc_class = get_instance_label(label,boundary)
-    instance_loss = focalLoss(pred[1],instanc_class)
+    if LOSS=='ORD':
+        instance_loss = ordinalageloss(pred[1],instanc_class)
+    if LOSS =='SEG':
+        instance_loss = focalLoss(pred[1],instanc_class)
     loss = instance_loss+piexl_loss
     return loss
 
@@ -334,39 +334,6 @@ def accuracy(input, target):
     input = input[valid_mask]
     return 100 * float(np.count_nonzero(input == target)) / target.size
 
-
-def sliding_window(top, step=10, window_size=(20, 20)):
-    """ Slide a window_shape window across the image with a stride of step """
-    for x in range(0, top.shape[0], step):
-        if x + window_size[0] > top.shape[0]:
-            x = top.shape[0] - window_size[0]
-        for y in range(0, top.shape[1], step):
-            if y + window_size[1] > top.shape[1]:
-                y = top.shape[1] - window_size[1]
-            yield x, y, window_size[0], window_size[1]
-
-
-def count_sliding_window(top, step=10, window_size=(20, 20)):
-    """ Count the number of windows in an image """
-    c = 0
-    for x in range(0, top.shape[0], step):
-        if x + window_size[0] > top.shape[0]:
-            x = top.shape[0] - window_size[0]
-        for y in range(0, top.shape[1], step):
-            if y + window_size[1] > top.shape[1]:
-                y = top.shape[1] - window_size[1]
-            c += 1
-    return c
-
-
-def grouper(n, iterable):
-    """ Browse an iterator by chunk of n elements """
-    it = iter(iterable)
-    while True:
-        chunk = tuple(itertools.islice(it, n))
-        if not chunk:
-            return
-        yield chunk
 
 def metrics(predictions, gts, label_values=LABELS):
 
@@ -418,21 +385,15 @@ def metrics(predictions, gts, label_values=LABELS):
 
     return MIoU
 
+
 def ordinalageloss(logits, targets):
-    """
-    logits: [B, num_bins]  模型输出
-    targets: [B]          年龄类别标签 (0,1,2,3,4...)
-    """
+    loss_ce = F.cross_entropy(logits, targets)
     num_bins = logits.shape[1]
+    ordinal_targets = (torch.arange(num_bins, device=logits.device)[None, :] < targets[:, None]).float()
+    loss_ord = F.binary_cross_entropy_with_logits(logits, ordinal_targets)
+    return 0.2 * loss_ce + 0.8 * loss_ord
 
-    # 生成 ordinal 目标：target=3 → [1,1,1,0]
-    # 表示 > 0, >1, >2 为真；>3 为假
-    ordinal_targets = torch.arange(num_bins, device=logits.device)[None, :] < targets[:, None]
-    ordinal_targets = ordinal_targets.float()
 
-    # 二分类交叉熵损失
-    loss = F.binary_cross_entropy_with_logits(logits, ordinal_targets)
-    return loss
 
 def metrics_sinple(predictions, gts, label_values=LABELS):
 
