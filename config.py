@@ -13,12 +13,12 @@ import os
 from torch.nn.modules.loss import _Loss, _WeightedLoss
 import matplotlib.pyplot as plt
 
-DATASET = 'hongkong' #amsterdam hongkong global_hongkong
-MODEL = 'Dino_geo' #Dino Dino_improve Dino_moe Dino_moe Dino_geo Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet CMT FTransDeepLab Unet
+DATASET = 'amsterdam' #amsterdam hongkong global_hongkong
+MODEL = 'Dino_moe' #Dino Dino_improve Dino_moe Dino_geo Dino_geo Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet CMT FTransDeepLab Unet
 #FTransUNet STunet MFNet太慢了
 MODE = 'train'
 PRETRAIN =''
-LOSS = 'ORD'  #ORD SEG
+LOSS = 'SEG'  #ORD SEG
 # Parameters
 ## SwinFusion
 # WINDOW_SIZE = (64, 64) # Patch size
@@ -296,8 +296,10 @@ def loss_calc_instance(pred, label,boundary, weights):
     instanc_class = get_instance_label(label,boundary)
     if LOSS=='ORD':
         instance_loss = ordinalageloss(pred[1],instanc_class)
-    if LOSS =='SEG':
+    elif LOSS =='SEG':
         instance_loss = focalLoss(pred[1],instanc_class)
+    else:
+        assert False
     loss = instance_loss+piexl_loss
     return loss
 

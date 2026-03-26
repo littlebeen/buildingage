@@ -2,6 +2,9 @@ def get_model(N_CLASSES,WINDOW_SIZE,MODEL):
     if MODEL == 'Dino':
         from model.singleDino.singleDino_single_building import UNetFormer as singleDino
         net = singleDino(num_classes=N_CLASSES).cuda()
+    if MODEL == 'Dinoa':
+        from model.singleDino.singleDino_single_building_improvea import UNetFormer as singleDino
+        net = singleDino(num_classes=N_CLASSES).cuda()
     if MODEL == 'Dino_mask':
         from model.singleDino.singleDino_single_building_mask import UNetFormer as singleDino
         net = singleDino(num_classes=N_CLASSES).cuda()

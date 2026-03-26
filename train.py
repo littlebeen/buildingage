@@ -77,6 +77,7 @@ def get_instance_result(logits):
     """
     probs = torch.sigmoid(logits)
     age_classes = torch.sum(probs > 0.5, dim=1)
+    age_classes = torch.clip(age_classes, 0, 5)
     return age_classes
 
 def get_instance_metric(pred_instance, instance_label,instance_year, label):
@@ -163,7 +164,10 @@ def test(net, first=False,loader = val_loader,epoch=100):
                     #save_img(height[item], main_dir, name = "height_{}".format(batch_idx))
             instance_num,correct,all_building_year = get_instance_metric(output[0], mask[0],label_year, target)
             if torch.is_tensor(output[1]):
-                correct = get_result(output[1]).cpu()
+                if LOSS=='ORD':
+                    correct = get_instance_result(output[1]).cpu()
+                if LOSS =='SEG':
+                    correct = get_result(output[1]).cpu()
 
             # mask_list.append(boundary.cpu())
             # feature_list.append(output[1].cpu())
@@ -244,7 +248,7 @@ def test_semantic(net,first=False, loader = val_loader,epoch=100):
     all_gts = []
     # Switch the network to inference mode
     with torch.no_grad():
-        for batch_idx, (data, mask, height,ufzs, target,boundary,label_year) in enumerate(loader):
+        for batch_idx, (data, mask, height,ufzs, target,boundary,geo_instance,label_year) in enumerate(loader):
             data, mask,height,ufzs, target = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda())
             optimizer.zero_grad()
             output = net(data, height, boundary, ufzs)

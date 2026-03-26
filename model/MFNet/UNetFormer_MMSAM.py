@@ -9,6 +9,19 @@ import torch.autograd as autograd
 from .MedSAM.models.sam import sam_model_registry
 from .MedSAM import cfg as cfg
 
+def draw_features(feature, savename=''):
+    H = W = 256
+    visualize = F.interpolate(feature, size=(H, W), mode='bilinear', align_corners=False)
+    visualize = visualize.detach().cpu().numpy()
+    visualize = np.mean(visualize, axis=1).reshape(H, W)
+    visualize = (((visualize - np.min(visualize)) / (np.max(visualize) - np.min(visualize))) * 255).astype(np.uint8)
+    # fvis = np.fft.fft2(visualize)
+    # fshift = np.fft.fftshift(fvis)
+    # fshift = 20*np.log(np.abs(fshift))
+    savedir = savename
+    visualize = cv2.applyColorMap(visualize, cv2.COLORMAP_JET)
+    cv2.imwrite(savedir, visualize)
+
 class Norm2d(nn.Module):
     def __init__(self, embed_dim):
         super().__init__()
@@ -213,20 +226,6 @@ class Block(nn.Module):
         x = x + self.drop_path(self.mlp(self.norm2(x)))
 
         return x
-
-class WF_single(nn.Module):
-    def __init__(self, in_channels=128, decode_channels=128, eps=1e-8):
-        super(WF_single, self).__init__()
-        self.pre_conv = Conv(in_channels, decode_channels, kernel_size=1)
-
-        self.weights = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
-        self.eps = eps
-        self.post_conv = ConvBNReLU(decode_channels, decode_channels, kernel_size=3)
-
-    def forward(self, x):
-        x = F.interpolate(x, scale_factor=2, mode='bilinear', align_corners=False)
-        x = self.post_conv(x)
-        return x
     
 class WF(nn.Module):
     def __init__(self, in_channels=128, decode_channels=128, eps=1e-8):
@@ -366,53 +365,6 @@ class AuxHead(nn.Module):
         feat = F.interpolate(feat, size=(h, w), mode='bilinear', align_corners=False)
         return feat
 
-
-class Decoder_single(nn.Module):
-    def __init__(self,
-                 encoder_channels=(64, 128, 256, 512),
-                 decode_channels=64,
-                 dropout=0.1,
-                 window_size=8,
-                 num_classes=6):
-        super(Decoder_single, self).__init__()
-
-        self.pre_conv = ConvBN(encoder_channels[-1], decode_channels, kernel_size=1)
-        self.b4 = Block(dim=decode_channels, num_heads=8, window_size=window_size)
-
-        self.b3 = Block(dim=decode_channels, num_heads=8, window_size=window_size)
-        self.p3 = WF_single(encoder_channels[-2], decode_channels)
-
-        self.b2 = Block(dim=decode_channels, num_heads=8, window_size=window_size)
-        self.p2 = WF_single(encoder_channels[-3], decode_channels)
-
-        self.p1 = FeatureRefinementHead_single(encoder_channels[-4], decode_channels)
-
-        self.segmentation_head = nn.Sequential(ConvBNReLU(decode_channels, decode_channels),
-                                               nn.Dropout2d(p=dropout, inplace=True),
-                                               Conv(decode_channels, num_classes, kernel_size=1))
-        self.init_weight()
-
-    def forward(self, res4, h, w):
-        x = self.b4(self.pre_conv(res4))
-        x = self.p3(x)
-        x = self.b3(x)
-
-        x = self.p2(x)
-        x = self.b2(x)
-
-        x = self.p1(x)
-        
-        x = self.segmentation_head(x)
-        x = F.interpolate(x, size=(h, w), mode='bilinear', align_corners=False)
-
-        return x
-
-    def init_weight(self):
-        for m in self.children():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, a=1)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
                     
 class Decoder(nn.Module):
     def __init__(self,
@@ -461,18 +413,6 @@ class Decoder(nn.Module):
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
 
-def draw_features(feature, savename=''):
-    H = W = 256
-    visualize = F.interpolate(feature, size=(H, W), mode='bilinear', align_corners=False)
-    visualize = visualize.detach().cpu().numpy()
-    visualize = np.mean(visualize, axis=1).reshape(H, W)
-    visualize = (((visualize - np.min(visualize)) / (np.max(visualize) - np.min(visualize))) * 255).astype(np.uint8)
-    # fvis = np.fft.fft2(visualize)
-    # fshift = np.fft.fftshift(fvis)
-    # fshift = 20*np.log(np.abs(fshift))
-    savedir = savename
-    visualize = cv2.applyColorMap(visualize, cv2.COLORMAP_JET)
-    cv2.imwrite(savedir, visualize)
 
 class UNetFormer(nn.Module):
     def __init__(self,
@@ -483,18 +423,13 @@ class UNetFormer(nn.Module):
                  ):
         super().__init__()
         args = cfg.parse_args()
-        # self.sam = sam_model_registry["vit_b"](args,checkpoint='weights/sam_vit_b_01ec64.pth')
-        self.sam = sam_model_registry["vit_l"](args,checkpoint='./weights/sam_vit_l_0b3195.pth')
+        self.sam = sam_model_registry["vit_b"](args,checkpoint='./weights/sam_vit_b_01ec64.pth')
+        #self.sam = sam_model_registry["vit_l"](args,checkpoint='./weights/sam_vit_l_0b3195.pth')
         # self.sam = sam_model_registry["vit_h"](args,checkpoint='weights/sam_vit_h_4b8939.pth')
         self.image_encoder = self.sam.image_encoder
         encoder_channels = (256, 256, 256, 256)
         
-        self.fpn1x = nn.Sequential(
-            nn.ConvTranspose2d(256, 256, kernel_size=2, stride=2),
-            Norm2d(256),
-            nn.GELU(),
-            nn.ConvTranspose2d(256, 256, kernel_size=2, stride=2),
-        )
+        self.fpn1x = nn.Upsample(scale_factor=4, mode='bilinear')
         self.fpn2x = nn.Sequential(
             nn.ConvTranspose2d(256, 256, kernel_size=2, stride=2),
         )
@@ -526,9 +461,8 @@ class UNetFormer(nn.Module):
                 value.requires_grad = True
 
         self.decoder = Decoder(encoder_channels, decode_channels, dropout, window_size, num_classes)
-        # self.decoder = Decoder_single(encoder_channels, decode_channels, dropout, window_size, num_classes)
 
-    def forward(self, x, y, mask, ufzs):
+    def forward(self, x, y, mask, ufzs,geo_instance):
         h, w = x.size()[-2:]
         y = y.repeat(1,3,1,1)
         deepx, deepy = self.image_encoder(x, y) # 256*16*16
