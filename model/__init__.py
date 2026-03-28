@@ -1,4 +1,7 @@
 def get_model(N_CLASSES,WINDOW_SIZE,MODEL):
+    if MODEL == 'Dino_final':
+        from model.singleDino.singleDino_single_building_final import UNetFormer as singleDino
+        net = singleDino(num_classes=N_CLASSES).cuda()
     if MODEL == 'Dino':
         from model.singleDino.singleDino_single_building import UNetFormer as singleDino
         net = singleDino(num_classes=N_CLASSES).cuda()

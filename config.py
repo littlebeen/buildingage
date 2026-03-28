@@ -13,12 +13,12 @@ import os
 from torch.nn.modules.loss import _Loss, _WeightedLoss
 import matplotlib.pyplot as plt
 
-DATASET = 'amsterdam' #amsterdam hongkong global_hongkong
-MODEL = 'Dino_moe' #Dino Dino_improve Dino_moe Dino_geo Dino_geo Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet CMT FTransDeepLab Unet
+DATASET = 'hongkong' #amsterdam hongkong global_hongkong
+MODEL = 'MFNet' #Dino Dino_improve Dino_moe Dino_geo Dino_geo Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet CMT FTransDeepLab Unet
 #FTransUNet STunet MFNet太慢了
-MODE = 'train'
-PRETRAIN =''
-LOSS = 'SEG'  #ORD SEG
+MODE = 'test'
+PRETRAIN ='./MFNet_epoch56_0.3037034934687922.pth'
+LOSS = 'ORD'  #ORD SEG
 # Parameters
 ## SwinFusion
 # WINDOW_SIZE = (64, 64) # Patch size
@@ -389,11 +389,11 @@ def metrics(predictions, gts, label_values=LABELS):
 
 
 def ordinalageloss(logits, targets):
-    loss_ce = F.cross_entropy(logits, targets)
+    # loss_ce = F.cross_entropy(logits, targets)
     num_bins = logits.shape[1]
     ordinal_targets = (torch.arange(num_bins, device=logits.device)[None, :] < targets[:, None]).float()
     loss_ord = F.binary_cross_entropy_with_logits(logits, ordinal_targets)
-    return 0.2 * loss_ce + 0.8 * loss_ord
+    return  loss_ord
 
 
 

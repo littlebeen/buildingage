@@ -152,16 +152,18 @@ def test(net, first=False,loader = val_loader,epoch=100):
             output = net(data, height, boundary, ufzs,geo_instance)
             class_indices = get_result(output[0])
             # if batch_idx%10==0:
-            #     print(batch_idx)
-            # if batch_idx<20:
-            #     for item in range(class_indices.shape[0]):
-            #         class_indices[target == -1]=-1
-                    #boundary[boundary>=0]=1
+                #print(batch_idx)
+            if batch_idx<20:
+                for item in range(class_indices.shape[0]):
+                    class_indices[target == -1]=-1
+                    boundary[boundary>=0]=1
                     #save_img(boundary[item], main_dir, name = "boundary_{}".format(batch_idx))
-                    #convert_to_color(class_indices[item], main_dir, name = "pred_{}".format(batch_idx))
-                    #convert_to_color(target[item], main_dir, name = "gt_{}".format(batch_idx))
+                    convert_to_color(class_indices[item], main_dir, name = "pred_{}".format(batch_idx))
+                    convert_to_color(target[item], main_dir, name = "gt_{}".format(batch_idx))
                     #save_img(data[item], main_dir, name = "img_{}".format(batch_idx))
                     #save_img(height[item], main_dir, name = "height_{}".format(batch_idx))
+            else:
+                break
             instance_num,correct,all_building_year = get_instance_metric(output[0], mask[0],label_year, target)
             if torch.is_tensor(output[1]):
                 if LOSS=='ORD':
@@ -253,13 +255,12 @@ def test_semantic(net,first=False, loader = val_loader,epoch=100):
             optimizer.zero_grad()
             output = net(data, height, boundary, ufzs)
             class_indices = get_result(output[0])
-            # if batch_idx==0:
-            #     for item in range(class_indices.shape[0]):
-            #         class_indices[target == -1]=-1
-            #         convert_to_color(class_indices[item], main_dir, name = "pred_{}".format(item))
-                    # convert_to_color(target[item], main_dir, name = "gt_{}".format(item))
-                    # save_img(data[item], main_dir, name = "img_{}".format(item))
-                    # save_img(height[item], main_dir, name = "height_{}".format(item))
+            if batch_idx<20:
+                for item in range(class_indices.shape[0]):
+                    class_indices[target == -1]=-1
+                    convert_to_color(class_indices[item], main_dir, name = "pred_{}".format(batch_idx))
+                    convert_to_color(target[item], main_dir, name = "gt_{}".format(batch_idx))
+                    #save_img(data[item], main_dir, name = "img_{}".format(batch_idx))
             valid_mask = target != -1
             target = target[valid_mask]
             class_indices = class_indices[valid_mask]
