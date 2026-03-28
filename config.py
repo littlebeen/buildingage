@@ -12,12 +12,14 @@ from PIL import Image
 import os
 from torch.nn.modules.loss import _Loss, _WeightedLoss
 import matplotlib.pyplot as plt
+from thop import profile
+import time
 
 DATASET = 'hongkong' #amsterdam hongkong global_hongkong
-MODEL = 'MFNet' #Dino Dino_improve Dino_moe Dino_geo Dino_geo Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet CMT FTransDeepLab Unet
-#FTransUNet STunet MFNet太慢了
+MODEL = 'Dino_final' #Dino Dino_improve Dino_moe Dino_geo Dino_geo Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet CMT FTransDeepLab Unet A2FPN
+#FTransUNet STunet MFNet 太慢了
 MODE = 'test'
-PRETRAIN ='./MFNet_epoch56_0.3037034934687922.pth'
+PRETRAIN =''
 LOSS = 'ORD'  #ORD SEG
 # Parameters
 ## SwinFusion
@@ -52,7 +54,61 @@ palette = {-1 : (255, 255, 255), # Undefined (white)
 invert_palette = {v: k for k, v in palette.items()}
 
 
+def analyze_model(net, input_size=(10, 3, 512, 512), device="cuda", verbose=True):
+    # 切换到评估模式
+    net.eval()
+    
+    # 创建输入
+    dummy_input = torch.randn(input_size).to(device)
+    depth_input =torch.randn((10, 1, 512, 512)).to(device)
+    ufz_input =torch.randn((10, 4, 512, 512)).to(device)
+    geo_input =torch.randn((10, 1, 512, 512)).to(device)
 
+    # ===================== 1. 计算 FLOPs & Params =====================
+    macs, params = profile(net, inputs=(dummy_input,depth_input,depth_input,ufz_input), verbose=False)
+    flops = 2 * macs
+    complexity_g = flops / 1e9  # G
+    params_m = params / 1e6     # M
+    # print(f"📊 Complexity:      {complexity_g:.2f} G")
+    # print(f"📦 Params:     {params_m,:.2f} M")
+    # net(dummy_input,depth_input,ufz_input,dummy_input)
+    # flops, params_m, complexity_g = 0, 0, 0
+
+    # ===================== 2. 计算显存占用 =====================
+    torch.cuda.empty_cache()
+    torch.cuda.reset_peak_memory_stats()
+    with torch.no_grad():
+        net(dummy_input,depth_input,depth_input,ufz_input)
+    memory_mb = torch.cuda.max_memory_allocated() / (1024 ** 2)
+    # ===================== 3. 计算推理速度 =====================
+    
+    with torch.no_grad():
+        for _ in range(5): 
+            net(dummy_input,depth_input,depth_input,ufz_input)
+        iters = 50
+        t0 = time.time()
+        for _ in range(iters): 
+            net(dummy_input,depth_input,depth_input,ufz_input)
+        fps = iters / (time.time() - t0)
+
+    # ===================== 结果格式化 =====================
+    result = {
+        "Complexity_FLOPs_G": complexity_g if flops else 0,
+        "Memory_MB": round(memory_mb, 2),
+        "Params_M": round(params_m, 2),
+        "Speed_ms": round(fps, 3),
+    }
+
+    if verbose:
+        print("=" * 60)
+        print(f"✅ 模型分析结果")
+        print(f"📊 Complexity:      {result['Complexity_FLOPs_G']:.2f} G")
+        print(f"📦 Params:     {result['Params_M']:.2f} M")
+        print(f"💾 Memory:     {result['Memory_MB']:.2f} MB")
+        print(f"⚡ Speed:      {result['Speed_ms']:.3f} FPS")
+        print("=" * 60)
+
+    return result
 
 def convert_to_color(arr_2d, main_dir,name, palette=palette):
     """ Numeric labels to RGB-color encoding """

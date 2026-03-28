@@ -462,7 +462,7 @@ class UNetFormer(nn.Module):
 
         self.decoder = Decoder(encoder_channels, decode_channels, dropout, window_size, num_classes)
 
-    def forward(self, x, y, mask, ufzs,geo_instance):
+    def forward(self, x, y, mask, ufzs,geo_instance=None):
         h, w = x.size()[-2:]
         y = y.repeat(1,3,1,1)
         deepx, deepy = self.image_encoder(x, y) # 256*16*16

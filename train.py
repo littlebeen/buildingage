@@ -5,7 +5,7 @@ torch.cuda.device_count()
 import torch.optim as optim
 from torch.autograd import Variable
 from IPython.display import clear_output
-from config import convert_to_color, mse_rmse, DATASET,save_img,metrics,metrics_sinple,accuracy,N_CLASSES,WINDOW_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL,loss_calc_only_instance,loss_calculate,PRETRAIN
+from config import convert_to_color, mse_rmse, DATASET,save_img,metrics,metrics_sinple,accuracy,N_CLASSES,WINDOW_SIZE,MODE,LOSS,WEIGHTS,DATASET,MODEL,loss_calc_only_instance,loss_calculate,PRETRAIN,analyze_model
 from dataset import get_dataloader
 import os
 from kmean import generate_image
@@ -23,6 +23,7 @@ for name, param in net.named_parameters():
         params += param.nelement()
 print(params / 1e6,'M')
 
+#analyze_model(net)
 # Load the datasets
 train_set = get_dataloader(DATASET, 'train')
 train_loader = torch.utils.data.DataLoader(train_set,batch_size=10,shuffle=True)

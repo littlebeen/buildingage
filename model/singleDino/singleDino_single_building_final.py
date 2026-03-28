@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from .resnet import LULCEncoder,DSMEncoder
 from torchvision.ops import DeformConv2d
 from .dinov3 import LayerNorm2d,DINOv3,Decoder
-
+from .singleDino_single_building_geo import GeoConditionalAdaIN,AttentionPool
 #模态合并v1    
 class TriModalAttentionFusion(nn.Module):
     def __init__(self, dim):
@@ -143,10 +143,11 @@ class UNetFormer(nn.Module):
         self.deep_encoder =DSMEncoder()
         self.ufz_encoder =LULCEncoder()
 
+    
         self.classifier = nn.Sequential(
-            nn.BatchNorm1d(2 * decode_channels),
+            nn.BatchNorm1d(decode_channels),
             nn.Dropout(0.15),
-            nn.Linear(2 * decode_channels, decode_channels),
+            nn.Linear(decode_channels, decode_channels),
             nn.GELU(),
             nn.BatchNorm1d(decode_channels),
             nn.Linear(decode_channels, num_classes)
@@ -158,8 +159,10 @@ class UNetFormer(nn.Module):
         self.fuse2 = CosGuidedMoEFusion(256)
         self.fuse3 = CosGuidedMoEFusion(256)
         self.fuse4 = CosGuidedMoEFusion(256)
+        self.AdaIN=GeoConditionalAdaIN()
+        self.attentionpool=AttentionPool(64)
 
-    def forward(self, x, depth, masks,ufzs,geo_instance):
+    def forward(self, x, depth, masks,ufzs,geo_feat=None):
         b, _, h, w = x.size()
         modality_mask = ufzs.flatten(1).all(dim=1, keepdim=True).float()
         ones_b1 = torch.ones(b, 2, device=x.device)
@@ -186,7 +189,8 @@ class UNetFormer(nn.Module):
         # 遍历该图的所有mask
 
         B, d, W_feat, H_feat = feat_map.shape
-        buildings=[]
+        instance_feats=[]
+        geos_list=[]
         for b in range(B):
             mask = masks[b, :, :] 
             feature = feat_map[b, :, :, :]
@@ -197,25 +201,19 @@ class UNetFormer(nn.Module):
                 mask_bid = mask_bid.unsqueeze(0).unsqueeze(0)
                 mask_interp = nn.functional.interpolate(
                     mask_bid, 
-                    size=(W_feat, H_feat),  # 对齐特征图尺寸
-                    mode='bilinear',        # 双线性插值（适合mask）
-                    align_corners=True     # 避免边缘失真，推荐设置
+                    size=(H_feat,W_feat),  # 对齐特征图尺寸
+                    mode='nearest',        # 双线性插值（适合mask）
                 )
-                mask_interp = mask_interp.squeeze()
-                
-                feat_flat = feature.reshape(d, -1)  # (d, 128×128)
-                #feat_flat = feature.flatten(1)
-                mask_flat = mask_interp.reshape(1, -1)  # (1, 128×128)
-                sum_m = torch.clamp(mask_flat.sum(), min=1e-6)
-                max_f = torch.max(feat_flat * mask_flat, dim=1)[0]
-                avg_f = torch.sum(feat_flat * mask_flat, dim=1) / sum_m
+                mask_interp = mask_interp[0]
 
-                inst_feat = torch.cat([max_f, avg_f], dim=0)
-                inst_feat = F.normalize(inst_feat, p=2, dim=0)
+                pooled_feat = self.attentionpool(feature.unsqueeze(0), mask_interp.unsqueeze(0))
+                instance_feats.append(pooled_feat)
+                geos_list.append(geo_feat[b,bid].unsqueeze(0))
 
-                buildings.append(inst_feat)
-
-        inst_logits = self.classifier(torch.stack(buildings, dim=0))  # (B×3)×num_classes
+        attention_f =torch.cat(instance_feats, dim=0)  # [N, C]
+        geos=torch.cat(geos_list, dim=0)
+        fused_feat = self.AdaIN(attention_f, geos) 
+        inst_logits = self.classifier(fused_feat)  # (B×3)×num_classes
         logits_clamped = torch.clamp(inst_logits, min=-10.0, max=10.0)
         return x_piexl, logits_clamped 
     
