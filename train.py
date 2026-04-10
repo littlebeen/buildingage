@@ -86,9 +86,11 @@ def get_instance_metric(pred_instance, instance_label,instance_year, label):
     all_build=[]
     correct_build=[]
     all_building_year=[]
+    instance_number_pixel=[]
     for j in range(pred_instance.shape[0]): #batch size
         for i in range(len(instance_label)): #每一个实例判断对不对
             instance_label_i = pred_instance[j][instance_label[i]]
+            instance_number_pixel.append(instance_label_i.shape[0])
             mean_tensor = instance_label_i.mean(dim=0)
             pred_instance_label = torch.argmax(mean_tensor)
             # pred_instance_label = torch.mode(instance_label_i)[0].item() # 该实例的预测类别
@@ -97,7 +99,7 @@ def get_instance_metric(pred_instance, instance_label,instance_year, label):
             all_building_year.append(label_i_year)
             all_build.append(label_i)
             correct_build.append(pred_instance_label.cpu())
-    return (all_build,correct_build, all_building_year)
+    return (all_build,correct_build, all_building_year, instance_number_pixel)
 
 def get_mask_number(pred_instance,masks):
     result = torch.zeros(masks.shape[1])
@@ -136,6 +138,30 @@ def test_loss_train(net,loader = test_loader):
     print(test_loss)
     net.train()
 
+def pixel_accuracy(data,pred, gt):
+    bins = [0, 1000, 5000, 10000, np.inf]
+    labels = ['0-1000', '1000-5000', '5000-10000', '10000+', ]
+    data =[x for sub in data for x in sub]
+    pred =[x for sub in pred for x in sub]
+    gt =[x for sub in gt for x in sub]
+    pred = np.array(pred)
+    gt = np.array(gt)
+    for i in range(len(bins)-1):
+        pred_group=[]
+        gt_group=[] 
+        low = bins[i]
+        high = bins[i+1]
+        if high == np.inf:
+            cnt = np.sum(np.array(data) >= low)
+            gt_group = gt[np.array(data) >= low]
+            pred_group = pred[np.array(data) >= low]
+        else:
+            cnt = np.sum((np.array(data) >= low) & (np.array(data) < high))
+            gt_group = gt[(np.array(data) >= low) & (np.array(data) < high)]
+            pred_group = pred[(np.array(data) >= low) & (np.array(data) < high)]
+        instance_accuracy = metrics_sinple(pred_group, gt_group)
+        print(f"第{labels[i]}组 | 样本数: {cnt}")
+
 def test(net, first=False,loader = val_loader,epoch=100):
     net.eval()
     all_preds = []
@@ -147,25 +173,26 @@ def test(net, first=False,loader = val_loader,epoch=100):
     mask_list = []
     feature_list = []
     labels = []
+    all_pixel=[]
     with torch.no_grad():
         for batch_idx, (data, mask, height,ufzs, target,boundary,geo_instance, label_year) in enumerate(loader):
             data, mask,height,ufzs, target,boundary,geo_instance, label_year = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda()),Variable(geo_instance.cuda()), Variable(label_year.cuda())
             output = net(data, height, boundary, ufzs,geo_instance)
             class_indices = get_result(output[0])
-            # if batch_idx%10==0:
-                #print(batch_idx)
-            if batch_idx<20:
-                for item in range(class_indices.shape[0]):
-                    class_indices[target == -1]=-1
-                    boundary[boundary>=0]=1
-                    #save_img(boundary[item], main_dir, name = "boundary_{}".format(batch_idx))
-                    convert_to_color(class_indices[item], main_dir, name = "pred_{}".format(batch_idx))
-                    convert_to_color(target[item], main_dir, name = "gt_{}".format(batch_idx))
-                    #save_img(data[item], main_dir, name = "img_{}".format(batch_idx))
-                    #save_img(height[item], main_dir, name = "height_{}".format(batch_idx))
-            else:
+            # if batch_idx%100==0:
+            #     print(batch_idx)
+            if batch_idx>20:
                 break
-            instance_num,correct,all_building_year = get_instance_metric(output[0], mask[0],label_year, target)
+            # if batch_idx<20:
+            #     for item in range(class_indices.shape[0]):
+            #         class_indices[target == -1]=-1
+            #         boundary[boundary>=0]=1
+            #         #save_img(boundary[item], main_dir, name = "boundary_{}".format(batch_idx))
+            #         convert_to_color(class_indices[item], main_dir, name = "pred_{}".format(batch_idx))
+            #         convert_to_color(target[item], main_dir, name = "gt_{}".format(batch_idx))
+            #         #save_img(data[item], main_dir, name = "img_{}".format(batch_idx))
+            #         #save_img(height[item], main_dir, name = "height_{}".format(batch_idx))
+            instance_num,correct,all_building_year,instance_number_pixel = get_instance_metric(output[0], mask[0],label_year, target)
             if torch.is_tensor(output[1]):
                 if LOSS=='ORD':
                     correct = get_instance_result(output[1]).cpu()
@@ -196,6 +223,7 @@ def test(net, first=False,loader = val_loader,epoch=100):
             all_build.append(instance_num)
             all_build_year.append(all_building_year)
             correct_build.append(correct)
+            all_pixel.append(instance_number_pixel)
 
             # accuracy = metrics_sinple(np.concatenate([p.ravel() for p in time_pred]),
             #                 np.concatenate([p.ravel() for p in time_gt]))
@@ -225,6 +253,7 @@ def test(net, first=False,loader = val_loader,epoch=100):
                             np.concatenate([p for p in all_build]))
         mse_rmse(np.concatenate([p for p in correct_build]),
                             np.concatenate([p for p in all_build_year]))
+        pixel_accuracy(all_pixel,correct_build,all_build)
         #generate_image(mask_list, feature_list,labels)
 
         # unique_vals, val_counts = np.unique(np.concatenate([p.ravel() for p in all_gts]), return_counts=True)

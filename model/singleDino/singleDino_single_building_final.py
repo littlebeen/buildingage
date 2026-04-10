@@ -6,6 +6,19 @@ from torchvision.ops import DeformConv2d
 from .dinov3 import LayerNorm2d,DINOv3,Decoder
 from .singleDino_single_building_geo import GeoConditionalAdaIN,AttentionPool
 #模态合并v1    
+class SimpleTriModalFusion(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.norm = LayerNorm2d(dim)
+        # 直接把3个模态concat，再用1x1卷积融合回dim维度
+        self.fusion = nn.Conv2d(dim * 3, dim, kernel_size=1)
+
+    def forward(self, img, depth, lulc, modality_mask=None):
+        # 直接拼接三个模态
+        fused = torch.cat([img, depth, lulc], dim=1)
+        # 1x1卷积融合
+        fused = self.fusion(fused)
+        return self.norm(fused)  
 class TriModalAttentionFusion(nn.Module):
     def __init__(self, dim):
         super().__init__()
@@ -16,7 +29,7 @@ class TriModalAttentionFusion(nn.Module):
             nn.Conv2d(dim, 3, 1),
             nn.Softmax(dim=1)
         )
-    def forward(self, img, depth, lulc):
+    def forward(self, img, depth, lulc, modality_mask):
         weight = self.attention(torch.cat([img, depth, lulc], dim=1))
         img_w = weight[:,0:1,:,:] * img
         depth_w = weight[:,1:2,:,:] * depth
@@ -166,7 +179,8 @@ class UNetFormer(nn.Module):
         b, _, h, w = x.size()
         modality_mask = ufzs.flatten(1).all(dim=1, keepdim=True).float()
         ones_b1 = torch.ones(b, 2, device=x.device)
-        #dsm_tensor = torch.bernoulli(torch.full((B, 1), 0.7, device=x.device))
+        zeros_b2 = torch.zeros(b, 2, device=x.device)
+        #dsm_tensor = torch.bernoulli(torch.full((b, 1), 0.7, device=x.device))
         modality_mask = torch.cat([ones_b1, modality_mask], dim=1)
 
         depth_feats = self.deep_encoder(depth)
@@ -208,6 +222,18 @@ class UNetFormer(nn.Module):
 
                 pooled_feat = self.attentionpool(feature.unsqueeze(0), mask_interp.unsqueeze(0))
                 instance_feats.append(pooled_feat)
+
+                # feat_flat = feature.reshape(d, -1)  # (d, 128×128)
+                # mask_flat = mask_interp.reshape(1, -1)  # (1, 128×128)
+                # sum_m = torch.clamp(mask_flat.sum(), min=1e-6)
+                # avg_f = torch.sum(feat_flat * mask_flat, dim=1) / sum
+                
+                # instance_feats.append(avg_f)
+
+
+                # zeros_b2 = torch.zeros(4, device=x.device)
+                # geos_list.append(zeros_b2.unsqueeze(0))
+
                 geos_list.append(geo_feat[b,bid].unsqueeze(0))
 
         attention_f =torch.cat(instance_feats, dim=0)  # [N, C]
