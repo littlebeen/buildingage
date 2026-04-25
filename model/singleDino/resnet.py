@@ -209,31 +209,31 @@ def resnet101(pretrained=False,in_channels=3, **kwargs):
 
 
 class DSMEncoder(nn.Module):
-    def __init__(self):
+    def __init__(self,encoder_channels=256):
         super().__init__()
 
         # 输入：1 × 512 × 512
         # 输出 4 个尺度，全部 256 通道，严格匹配你的 res1~res4
 
         # 512 → 256
-        self.conv1 = nn.Conv2d(1, 256, kernel_size=3, stride=2, padding=1)
-        self.bn1 = nn.BatchNorm2d(256)
+        self.conv1 = nn.Conv2d(1, encoder_channels, kernel_size=3, stride=2, padding=1)
+        self.bn1 = nn.BatchNorm2d(encoder_channels)
 
         # 256 → 128
-        self.conv2 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
-        self.bn2 = nn.BatchNorm2d(256)
+        self.conv2 = nn.Conv2d(encoder_channels, encoder_channels, kernel_size=3, stride=2, padding=1)
+        self.bn2 = nn.BatchNorm2d(encoder_channels)
 
         # 128 → 64
-        self.conv3 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
-        self.bn3 = nn.BatchNorm2d(256)
+        self.conv3 = nn.Conv2d(encoder_channels, encoder_channels, kernel_size=3, stride=2, padding=1)
+        self.bn3 = nn.BatchNorm2d(encoder_channels)
 
         # 64 → 32
-        self.conv4 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
-        self.bn4 = nn.BatchNorm2d(256)
+        self.conv4 = nn.Conv2d(encoder_channels, encoder_channels, kernel_size=3, stride=2, padding=1)
+        self.bn4 = nn.BatchNorm2d(encoder_channels)
 
         # 32 → 16
-        self.conv5 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
-        self.bn5 = nn.BatchNorm2d(256)
+        self.conv5 = nn.Conv2d(encoder_channels, encoder_channels, kernel_size=3, stride=2, padding=1)
+        self.bn5 = nn.BatchNorm2d(encoder_channels)
 
     def forward(self, x):
         # 输入 DSM: [B, 1, 512, 512]
@@ -250,20 +250,20 @@ class DSMEncoder(nn.Module):
 
 
 class LULCEncoder(nn.Module):
-    def __init__(self):
+    def __init__(self, encoder_channels=256):
         super().__init__()
         # 输入：4 通道（1990,2000,2010,2020）
-        self.conv1 = nn.Conv2d(4, 256, kernel_size=3, stride=2, padding=1)
-        self.conv2 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
-        self.conv3 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
-        self.conv4 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
-        self.conv5 = nn.Conv2d(256, 256, kernel_size=3, stride=2, padding=1)
+        self.conv1 = nn.Conv2d(4, encoder_channels, kernel_size=3, stride=2, padding=1)
+        self.conv2 = nn.Conv2d(encoder_channels, encoder_channels, kernel_size=3, stride=2, padding=1)
+        self.conv3 = nn.Conv2d(encoder_channels, encoder_channels, kernel_size=3, stride=2, padding=1)
+        self.conv4 = nn.Conv2d(encoder_channels, encoder_channels, kernel_size=3, stride=2, padding=1)
+        self.conv5 = nn.Conv2d(encoder_channels, encoder_channels, kernel_size=3, stride=2, padding=1)
 
-        self.bn1 = nn.BatchNorm2d(256)
-        self.bn2 = nn.BatchNorm2d(256)
-        self.bn3 = nn.BatchNorm2d(256)
-        self.bn4 = nn.BatchNorm2d(256)
-        self.bn5 = nn.BatchNorm2d(256)
+        self.bn1 = nn.BatchNorm2d(encoder_channels)
+        self.bn2 = nn.BatchNorm2d(encoder_channels)
+        self.bn3 = nn.BatchNorm2d(encoder_channels)
+        self.bn4 = nn.BatchNorm2d(encoder_channels)
+        self.bn5 = nn.BatchNorm2d(encoder_channels)
 
     def forward(self, x):
         # x: [B, 4, 512, 512]

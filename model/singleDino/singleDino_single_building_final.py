@@ -19,22 +19,6 @@ class SimpleTriModalFusion(nn.Module):
         # 1x1卷积融合
         fused = self.fusion(fused)
         return self.norm(fused)  
-class TriModalAttentionFusion(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.norm = LayerNorm2d(dim)
-        self.attention = nn.Sequential(
-            nn.Conv2d(dim*3, dim, 1),
-            nn.GELU(),
-            nn.Conv2d(dim, 3, 1),
-            nn.Softmax(dim=1)
-        )
-    def forward(self, img, depth, lulc, modality_mask):
-        weight = self.attention(torch.cat([img, depth, lulc], dim=1))
-        img_w = weight[:,0:1,:,:] * img
-        depth_w = weight[:,1:2,:,:] * depth
-        lulc_w = weight[:,2:3,:,:] * lulc
-        return self.norm(img_w + depth_w + lulc_w)
     
 #模态融合v4无cross attention    
 
@@ -107,9 +91,51 @@ class DeformableConvBlock(nn.Module):
         return self.norm(x)
 
 
+class GeoSimpleConcat(nn.Module):
+    """
+    改进版直接拼接：
+    1. 先对齐维度
+    2. 特征归一化
+    3. 两层MLP（防止梯度消失）
+    能收敛，比原版强很多
+    """
+    def __init__(self, img_dim=64, geo_dim=4, hidden_dim=None):
+        super().__init__()
+        hidden_dim = hidden_dim or img_dim * 2
+        
+        # 先把地理/属性特征升维，和图像特征维度匹配（关键改进）
+        self.geo_proj = nn.Sequential(
+            nn.Linear(geo_dim, img_dim),
+            nn.LayerNorm(img_dim),
+            nn.GELU()
+        )
+        
+        # 拼接后的融合MLP（两层，比单层强太多）
+        self.fusion = nn.Sequential(
+            nn.Linear(img_dim * 2, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, img_dim)
+        )
+
+    def forward(self, instance_feat, geo_feat):
+        # instance_feat: 图像/实例特征 [B, img_dim]
+        # geo_feat:     几何/属性特征  [B, geo_dim]
+        
+        # 统一维度 + 归一化
+        geo_proj = self.geo_proj(geo_feat)  # [B, img_dim]
+        
+        # 拼接
+        fused = torch.cat([instance_feat, geo_proj], dim=-1)
+        
+        # 融合映射
+        out = self.fusion(fused)
+        return out
+
 class UNetFormer(nn.Module):
     def __init__(self,
                  decode_channels=64,
+                 encoder_channels=256,
                  dropout=0.1,
                  window_size=8,
                  num_classes=6
@@ -126,8 +152,7 @@ class UNetFormer(nn.Module):
             ),
             interaction_indexes=[23]
         )
-
-        encoder_channels = (256, 256, 256, 256)
+        encoder_channels_list = (encoder_channels, encoder_channels, encoder_channels, encoder_channels)
 
         for n, value in self.image_encoder.named_parameters():
             if "Adapter" not in n:
@@ -138,23 +163,23 @@ class UNetFormer(nn.Module):
         self.neck = nn.Sequential(
             nn.Conv2d(1024, 512, kernel_size=1, bias=False, ),
             LayerNorm2d(512),
-            DeformableConvBlock(512, 256),
-            LayerNorm2d(256) )
+            DeformableConvBlock(512, encoder_channels),
+            LayerNorm2d(encoder_channels) )
         self.fpn1 = nn.Sequential(
-            nn.ConvTranspose2d(256, 256, kernel_size=2, stride=2),
-            LayerNorm2d(256),
+            nn.ConvTranspose2d(encoder_channels, encoder_channels, kernel_size=2, stride=2),
+            LayerNorm2d(encoder_channels),
             nn.GELU(),
-            nn.ConvTranspose2d(256, 256, kernel_size=2, stride=2),
+            nn.ConvTranspose2d(encoder_channels, encoder_channels, kernel_size=2, stride=2),
         )
         self.fpn2 = nn.Sequential(
-            nn.ConvTranspose2d(256, 256, kernel_size=2, stride=2),
+            nn.ConvTranspose2d(encoder_channels, encoder_channels, kernel_size=2, stride=2),
         )
         self.fpn3 = nn.Identity()
         self.fpn4 = nn.MaxPool2d(kernel_size=2, stride=2)
 
-        self.decoder = Decoder(encoder_channels, decode_channels, dropout, window_size, num_classes)
-        self.deep_encoder =DSMEncoder()
-        self.ufz_encoder =LULCEncoder()
+        self.decoder = Decoder(encoder_channels_list, decode_channels, dropout, window_size, num_classes)
+        self.deep_encoder =DSMEncoder(encoder_channels)
+        self.ufz_encoder =LULCEncoder(encoder_channels)
 
     
         self.classifier = nn.Sequential(
@@ -168,12 +193,14 @@ class UNetFormer(nn.Module):
         
 
          
-        self.fuse1 = CosGuidedMoEFusion(256)
-        self.fuse2 = CosGuidedMoEFusion(256)
-        self.fuse3 = CosGuidedMoEFusion(256)
-        self.fuse4 = CosGuidedMoEFusion(256)
-        self.AdaIN=GeoConditionalAdaIN()
-        self.attentionpool=AttentionPool(64)
+        self.fuse1 = CosGuidedMoEFusion(encoder_channels)
+        self.fuse2 = CosGuidedMoEFusion(encoder_channels)
+        self.fuse3 = CosGuidedMoEFusion(encoder_channels)
+        self.fuse4 = CosGuidedMoEFusion(encoder_channels)
+        #消融实验：直接拼接+MLP融合
+        #self.AdaIN=GeoSimpleConcat()
+        self.AdaIN=GeoConditionalAdaIN(img_dim=decode_channels)
+        self.attentionpool=AttentionPool(decode_channels)
 
     def forward(self, x, depth, masks,ufzs,geo_feat=None):
         b, _, h, w = x.size()
@@ -226,9 +253,9 @@ class UNetFormer(nn.Module):
                 # feat_flat = feature.reshape(d, -1)  # (d, 128×128)
                 # mask_flat = mask_interp.reshape(1, -1)  # (1, 128×128)
                 # sum_m = torch.clamp(mask_flat.sum(), min=1e-6)
-                # avg_f = torch.sum(feat_flat * mask_flat, dim=1) / sum
+                # avg_f = torch.sum(feat_flat * mask_flat, dim=1) / sum_m
                 
-                # instance_feats.append(avg_f)
+                # instance_feats.append(avg_f.unsqueeze(0))
 
 
                 # zeros_b2 = torch.zeros(4, device=x.device)
