@@ -54,6 +54,42 @@ palette = {-1 : (255, 255, 255), # Undefined (white)
 invert_palette = {v: k for k, v in palette.items()}
 
 
+def print_image(data):
+    # 定义你要的5个区间
+    bins = [0, 1000, 5000, 10000, np.inf]
+    labels = ['0-1000', '1000-5000', '5000-10000', '10000+', ]
+    
+    # 统计每个区间的数量
+    counts = []
+    for i in range(len(bins)-1):
+        low = bins[i]
+        high = bins[i+1]
+        if high == np.inf:
+            cnt = np.sum(np.array(data) >= low)
+        else:
+            cnt = np.sum((np.array(data) >= low) & (np.array(data) < high))
+        counts.append(cnt)
+
+    # 画图
+    plt.figure(figsize=(10, 5))
+    bars = plt.bar(labels, counts, color='#4472C4', edgecolor='black', alpha=0.8)
+
+    # 在柱子上显示数量
+    for bar, cnt in zip(bars, counts):
+        plt.text(bar.get_x() + bar.get_width()/2,
+                 bar.get_height() + max(counts)*0.01,
+                 str(cnt), ha='center', fontsize=12)
+
+    plt.title('Distribution of Building Pixel Counts', fontsize=14)
+    plt.xlabel('Pixel Count Range', fontsize=12)
+    plt.ylabel('Number of Samples', fontsize=12)
+    plt.grid(axis='y', alpha=0.3)
+    plt.tight_layout()
+
+    # 保存图片
+    plt.savefig('building_pixel_distribution.png', dpi=300, bbox_inches='tight')
+    plt.close()  # 不弹出窗口，直接保存
+
 def analyze_model(net, input_size=(10, 3, 512, 512), device="cuda", verbose=True):
     # 切换到评估模式
     net.eval()
@@ -328,16 +364,6 @@ def loss_calc(pred, label,boundary, weights):
     piexl_loss = criterion_piexl(pred[0],label,weights)
     loss = piexl_loss
     return loss
-
-    # n, c, h, w = pred.size()
-    # target_mask = (label >= 0) * (label != -1)
-    # label = label[target_mask]
-    # pred = pred.transpose(1, 2).transpose(2, 3).contiguous()
-    # pred = pred[target_mask.view(n, h, w, 1).repeat(1, 1, 1, c)].view(-1, c)
-    # one_hot_label = F.one_hot(label, num_classes=N_CLASSES)
-    # label = fast_label_to_dist(one_hot_label)
-    # label = pdf_fn(label)
-    # return manual_cross_entropy_with_soft_label(pred, label, dim=1)
 
 
 def loss_calc_instance(pred, label,boundary, weights):

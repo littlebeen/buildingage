@@ -269,3 +269,52 @@ def cluster_and_visualize(all_feats, all_building_ids, all_ages=None, n_clusters
     
     return cluster_labels
 
+def save_each_expert_heatmap_separately(gate, save_prefix="expert_gate", cmap='viridis', dpi=300):
+    """
+    对第一个样本的每一个 expert，分别保存一张热力图
+    gate: [B, num_experts, H, W]
+    """
+    # 取第一个样本
+    gate_first = gate[0].detach().cpu().numpy()  # [num_experts, H, W]
+    num_experts = gate_first.shape[0]
+
+    for i in range(num_experts):
+        # 取出当前专家的权重
+        heatmap = gate_first[i]
+        
+        # 创建单张图
+        plt.figure(figsize=(5, 5))
+        im =plt.imshow(heatmap, cmap=cmap)
+        plt.axis('off')
+        plt.colorbar(im, shrink=0.8)
+        # 保存：expert_gate_0.png, expert_gate_1.png, ...
+        save_path = f"{save_prefix}_{i}.png"
+        plt.savefig(save_path, dpi=dpi, bbox_inches='tight', pad_inches=0)
+        plt.close()  # 关闭，不显示
+
+
+def save_feature_heatmaps_with_bar(feat, save_prefix="feature",color_bar=False, dpi=300, cmap="coolwarm"):
+    """
+    输入 feat: [B, 256, H, W]
+    功能：对第 1 个样本的 256 个通道求平均 → 输出一张热力图 + colorbar
+    只保存，不显示
+    """
+    # 取第 1 个样本 [256, H, W]
+    feat = feat[0].detach().cpu().float().numpy()
+
+    # ✅ 256 个通道求平均 → [H, W]
+    feature_map = feat.mean(axis=0)
+
+    # 画图
+    plt.figure(figsize=(5, 5))
+    im = plt.imshow(feature_map, cmap=cmap)
+    plt.axis("off")
+
+    # colorbar
+    if color_bar:
+        plt.colorbar(im, shrink=0.8)
+
+    # 保存一张图
+    save_path = f"{save_prefix}_avg.png"
+    plt.savefig(save_path, dpi=dpi, bbox_inches="tight", pad_inches=0)
+    plt.close()

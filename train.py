@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-
 torch.cuda.device_count()
 import torch.optim as optim
 from torch.autograd import Variable
@@ -12,7 +11,7 @@ from kmean import generate_image
 from model import get_model
 print(MODEL + ', ' + MODE + ', ' + DATASET + ', ' + LOSS)
 main_dir = './result/{}_{}'.format(MODEL, DATASET)
-
+print(main_dir)
 if not os.path.exists(main_dir):
     os.makedirs(main_dir)
 
@@ -37,7 +36,7 @@ print("training : ", len(train_set))
 print("val : ", len(val_set))
 print("test : ", len(test_set))
 
-base_lr = 0.005
+base_lr = 0.002
 params_dict = dict(net.named_parameters())
 params = []
 print('lr: ', base_lr)
@@ -181,8 +180,8 @@ def test(net, first=False,loader = val_loader,epoch=100):
             class_indices = get_result(output[0])
             # if batch_idx%100==0:
             #     print(batch_idx)
-            if batch_idx>20:
-                break
+            # if batch_idx>20:
+            #     break
             # if batch_idx<20:
             #     for item in range(class_indices.shape[0]):
             #         class_indices[target == -1]=-1
@@ -391,6 +390,7 @@ if MODE == 'train':
     train(net, optimizer, 60, test_function, scheduler)
 if MODE == 'test':
     net.load_state_dict(torch.load(PRETRAIN),strict=True) 
+    print("Model loaded from {}".format(PRETRAIN))
     net.eval()
     if DATASET=='global_hongkong':
         test_all(net,val_loader)

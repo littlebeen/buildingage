@@ -5,6 +5,7 @@ from .resnet import LULCEncoder,DSMEncoder
 from torchvision.ops import DeformConv2d
 from .dinov3 import LayerNorm2d,DINOv3,Decoder
 from .singleDino_single_building_geo import GeoConditionalAdaIN,AttentionPool
+from kmean import save_each_expert_heatmap_separately,save_feature_heatmaps_with_bar
 #模态合并v1    
 class SimpleTriModalFusion(nn.Module):
     def __init__(self, dim):
@@ -59,8 +60,9 @@ class CosGuidedMoEFusion(nn.Module):
         # 2. 保留【轻量余弦引导】
         # ======================
         cos_sim = F.cosine_similarity(img.flatten(2), ctx.flatten(2), dim=1, eps=1e-8)
+        #save_feature_heatmaps_with_bar(cos_sim.view(B,1,H,W), "cos_sim",color_bar=True)
         img_guided = img * (1 + 0.1 * cos_sim.view(B,1,H,W))  # 轻量不耗时
-
+        #save_feature_heatmaps_with_bar(img_guided, "img_guide")
         # ======================
         # 3. 保留【MoE混合专家】创新点
         # ======================
@@ -69,14 +71,49 @@ class CosGuidedMoEFusion(nn.Module):
         # 轻量门控（无循环，无耗时操作）
         gate = self.modal_gate(torch.cat([img, dsm, lulc], dim=1))
         gate = torch.softmax(gate, dim=1)  # [B, num_experts, H, W]
+        #save_each_expert_heatmap_separately(gate)
 
         # 专家融合（最快写法）
         fused = 0.0
         for i in range(self.num_experts):
+
             fused = fused + gate[:, i:i+1] * self.experts[i](feat)
+            #t = self.experts[i](feat)
+            #save_feature_heatmaps_with_bar(t, "expert_{}".format(i))
+            #save_feature_heatmaps_with_bar(gate[:, i:i+1] * self.experts[i](feat), "gateexpert_{}".format(i))
 
         # 残差连接
         out = self.norm(img + fused)
+        return out
+
+class DSMlulcMoEFusion(nn.Module):
+    def __init__(self, dim, num_experts=2, dropout=0.0):
+        super().__init__()
+        self.dim = dim
+        self.num_experts = num_experts
+
+        self.experts = nn.ModuleList([
+            nn.Conv2d(dim * 2, dim, kernel_size=1)
+            for _ in range(num_experts)
+        ])
+
+        self.modal_gate = nn.Conv2d(dim * 2, num_experts, kernel_size=1)
+        self.norm = LayerNorm2d(dim)
+
+    def forward(self, dsm, lulc, modality_mask):
+        mask_spatial = modality_mask.unsqueeze(-1).unsqueeze(-1)  # [B,3,1,1]
+        dsm = dsm * mask_spatial[:,1:2]
+        lulc = lulc * mask_spatial[:,2:3]
+
+        feat = torch.cat([dsm, lulc], dim=1)
+        gate = self.modal_gate(feat)
+        gate = torch.softmax(gate, dim=1)
+
+        fused = 0.0
+        for i in range(self.num_experts):
+            fused = fused + gate[:, i:i+1] * self.experts[i](feat)
+
+        out = self.norm(fused)
         return out
 
 class DeformableConvBlock(nn.Module):
@@ -198,7 +235,7 @@ class UNetFormer(nn.Module):
         self.fuse3 = CosGuidedMoEFusion(encoder_channels)
         self.fuse4 = CosGuidedMoEFusion(encoder_channels)
         #消融实验：直接拼接+MLP融合
-        #self.AdaIN=GeoSimpleConcat()
+        #self.AdaIN=GeoSimpleConcat(img_dim=decode_channels)
         self.AdaIN=GeoConditionalAdaIN(img_dim=decode_channels)
         self.attentionpool=AttentionPool(decode_channels)
 
