@@ -18,7 +18,7 @@ import time
 DATASET = 'hongkong' #amsterdam hongkong global_hongkong
 MODEL = 'Dino_final' #Dino Dino_improve Dino_moe Dino_geo Dino_geo Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet CMT FTransDeepLab Unet A2FPN
 #FTransUNet STunet MFNet 太慢了
-MODE = 'test'
+MODE = 'train'
 PRETRAIN =''
 LOSS = 'ORD'  #ORD SEG
 # Parameters

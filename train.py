@@ -252,7 +252,7 @@ def test(net, first=False,loader = val_loader,epoch=100):
                             np.concatenate([p for p in all_build]))
         mse_rmse(np.concatenate([p for p in correct_build]),
                             np.concatenate([p for p in all_build_year]))
-        pixel_accuracy(all_pixel,correct_build,all_build)
+        #pixel_accuracy(all_pixel,correct_build,all_build)
         #generate_image(mask_list, feature_list,labels)
 
         # unique_vals, val_counts = np.unique(np.concatenate([p.ravel() for p in all_gts]), return_counts=True)
