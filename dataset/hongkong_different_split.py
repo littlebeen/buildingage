@@ -66,7 +66,7 @@ def get_year_type(label):
     arr_processed[(arr_processed >= 1990) & (arr_processed < 2000)] = 4
     arr_processed[(arr_processed >= 2000) & (arr_processed < 2010)] = 5
     arr_processed[(arr_processed >= 2010) & (arr_processed <= 2020)] = 6
-    arr_processed[(arr_processed >= 2020)] = 0
+    arr_processed[(arr_processed > 2020)] = 0
     arr_processed[(arr_processed <0)] = 0
     return arr_processed
 def get_ufz_type(arr_processed):
@@ -78,35 +78,22 @@ class Hongkong_dataset(torch.utils.data.Dataset):
     def __init__(self, mode,cache=False, augmentation=True):
         super(Hongkong_dataset, self).__init__()
         if mode=='test':
-            MAIN_FOLDER = '../dataset/hk_building_age/val/'
+            MAIN_FOLDER = '../dataset/hk_building_age/no_same_building/val/'
         else:
-            MAIN_FOLDER = '../dataset/hk_building_age/'+mode+'/'
-        DATA_FOLDER = MAIN_FOLDER + 'image/tdop*.tif'
-        self.LABEL_FOLDER = MAIN_FOLDER + 'class/'
-        self.BOUNDARY_FOLDER = MAIN_FOLDER + 'mask/'
-        self.HEIGHT_FOLDER = MAIN_FOLDER + 'height/'
-        self.UFZ_FOLDER = MAIN_FOLDER + 'ufz/'
+            MAIN_FOLDER = '../dataset/hk_building_age/no_same_building/'+mode+'/'
+
+        ALL_LABELED_FOLDER = '/mnt/d/Jialu/dataset/hk_building_age/all_labeled_dataset/'
+        self.IMAGE_FOLDER = ALL_LABELED_FOLDER + 'image/'
+        self.LABEL_FOLDER = ALL_LABELED_FOLDER + 'class/'
+        self.HEIGHT_FOLDER = ALL_LABELED_FOLDER + 'height/'
+        self.UFZ_FOLDER = ALL_LABELED_FOLDER + 'ufz/'
+
         self.mode = mode
         self.augmentation = augmentation
         self.cache = cache
         self.max_num=0
-        self.data_files = glob.glob(DATA_FOLDER)
-        if mode=='test':
-            self.data_files = random.sample(self.data_files, 100)
-        # if mode == 'train':
-        # # List of files
-        #     #self.data_files = random.sample(glob.glob(DATA_FOLDER), 2075)
-        #     self.data_files = glob.glob(DATA_FOLDER)
-        #     with open("train.txt", "r", encoding="utf-8") as f:
-        #         self.data_files +=[line.strip() for line in f if line.strip()]
-        # else:
-        #     with open("test.txt", "r", encoding="utf-8") as f:
-        #         self.data_files = [line.strip() for line in f if line.strip()]
-
-        # Sanity check : raise an error if some files do not exist
-        # for f in self.data_files + self.label_files:
-        #     if not os.path.isfile(f):
-        #         raise KeyError('{} is not a file !'.format(f))
+        # train/val 文件夹下只有 mask 文件，从中获取文件列表
+        self.data_files = glob.glob(MAIN_FOLDER + '*mask.tif')
         self.csv_data=[]
         with open('../dataset/hk_building_age/building_area.csv', 'r', encoding='utf-8') as f:
             # 读取每一行
@@ -199,8 +186,12 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         return instance_masks
 
     def __getitem__(self, i):
-        name=self.data_files[i].split('/')[-1].split('.')[0].replace('image', '')
-        data = io.imread(self.data_files[i])[:, :, :3].transpose((2, 0, 1))
+        mask_path = self.data_files[i]
+        # 从 mask 文件名提取 basename，例如 "tdop2020_mask.tif" → name = "tdop2020_"
+        basename = mask_path.split('/')[-1].replace('.tif', '')
+        name = basename.replace('mask', '')
+
+        data = io.imread(self.IMAGE_FOLDER + name + 'image.tif')[:, :, :3].transpose((2, 0, 1))
         data = 1 / 255 * np.asarray(data, dtype='float32')
 
         height_files = self.HEIGHT_FOLDER+name+'height.tif'
@@ -228,8 +219,7 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         
         label_id = get_year_type(label) #背景为0
 
-        boundary_files = self.BOUNDARY_FOLDER+name+'mask.tif'
-        boundary = np.asarray(io.imread(boundary_files))
+        boundary = np.asarray(io.imread(mask_path))
         boundary = boundary.astype(np.int64)
         zero_mask = (label_id == 0)
         boundary[zero_mask] = 0
@@ -261,6 +251,7 @@ class Hongkong_dataset(torch.utils.data.Dataset):
         # convert_to_color(label-1, main_dir='.', name='instance_{}'.format(i))
         # if random.random() < 0.5:
         #     height[:]=0
+        assert boundary.max() > -1, "Boundary mask contains values less than -1"
         if self.mode == 'train' or self.mode == 'test':
             return (torch.from_numpy(data),
                     torch.from_numpy(data), #无用之前是instances表示每一个instance 的mask，但train里面没有用到，先放data占位

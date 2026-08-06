@@ -15,11 +15,11 @@ import matplotlib.pyplot as plt
 from thop import profile
 import time
 
-DATASET = 'hongkong' #amsterdam hongkong global_hongkong
+DATASET = 'hongkong' #amsterdam hongkong global_hongkong instance_hongkong place_hongkong
 MODEL = 'Dino_final' #Dino Dino_improve Dino_moe Dino_geo Dino_geo Unetformer AsymFormer CMTFNet ABCNet CMX CMNeXt Segformer TransUNet CMT FTransDeepLab Unet A2FPN
 #FTransUNet STunet MFNet 太慢了
-MODE = 'train'
-PRETRAIN =''
+MODE = 'test'
+PRETRAIN ='/mnt/d/Jialu/buildingage/Dino_final_epoch26_0.4679926841596296.pth'
 LOSS = 'ORD'  #ORD SEG
 # Parameters
 ## SwinFusion
@@ -34,7 +34,7 @@ BATCH_SIZE = 10 # Number of samples in a mini-batch
 #LABELS = ["<=1960", "1960<x<=1970", "1970<x<=1980", "1980<x<=1990", "1990<x<=2000", "2000<x<=2010", "2010<x<=2020"] # Label names
 if DATASET=='amsterdam':
     LABELS = ["x<1980", "1980<=x<=2000", "2000<x"] # Label names
-if DATASET=='hongkong' or DATASET=='global_hongkong':
+elif 'hongkong' in DATASET:
     LABELS = [ "x<=1970","1970<x<=1980", "1980<x<=1990","1990<x<=2000", "2000<x<=2010", "2000<x<=2020"] # Label names
 N_CLASSES = len(LABELS) # Number of classes
 WEIGHTS = torch.ones(N_CLASSES) # Weights for class balancing

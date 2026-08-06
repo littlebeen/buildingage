@@ -30,11 +30,11 @@ train_loader = torch.utils.data.DataLoader(train_set,batch_size=10,shuffle=True)
 val_set = get_dataloader(DATASET, 'val')
 val_loader = torch.utils.data.DataLoader(val_set,batch_size=1)
 
-test_set = get_dataloader(DATASET, 'test')
-test_loader = torch.utils.data.DataLoader(test_set,batch_size=10)
+# test_set = get_dataloader(DATASET, 'test')
+# test_loader = torch.utils.data.DataLoader(test_set,batch_size=10)
 print("training : ", len(train_set))
 print("val : ", len(val_set))
-print("test : ", len(test_set))
+# print("test : ", len(test_set))
 
 base_lr = 0.002
 params_dict = dict(net.named_parameters())
@@ -124,18 +124,18 @@ def test_loss(net, first=False,loader = val_loader): #计算test取最大值的l
         total_loss /= len(loader)
         print(test_loss)
 
-def test_loss_train(net,loader = test_loader):
-    net.eval()
-    test_loss=0.
-    for batch_idx, (data, mask, height,ufzs, target,boundary,label_year) in enumerate(loader):
-        data, mask,height,ufzs, target,boundary = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda())
-        with torch.no_grad():
-            output = net(data, height, boundary, ufzs)
-            loss_ce = loss_calc_only_instance(output, target,boundary, weights=None)
-            test_loss += loss_ce.item()
-    test_loss /= len(loader)
-    print(test_loss)
-    net.train()
+# def test_loss_train(net,loader = test_loader):
+#     net.eval()
+#     test_loss=0.
+#     for batch_idx, (data, mask, height,ufzs, target,boundary,label_year) in enumerate(loader):
+#         data, mask,height,ufzs, target,boundary = Variable(data.cuda()), Variable(mask.cuda()), Variable(height.cuda()),Variable(ufzs.cuda()), Variable(target.cuda()),Variable(boundary.cuda())
+#         with torch.no_grad():
+#             output = net(data, height, boundary, ufzs)
+#             loss_ce = loss_calc_only_instance(output, target,boundary, weights=None)
+#             test_loss += loss_ce.item()
+#     test_loss /= len(loader)
+#     print(test_loss)
+#     net.train()
 
 def pixel_accuracy(data,pred, gt):
     bins = [0, 1000, 5000, 10000, np.inf]
