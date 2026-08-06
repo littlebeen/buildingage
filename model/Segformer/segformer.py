@@ -98,7 +98,7 @@ class SegFormer(nn.Module):
         }[phi]
         self.decode_head = SegFormerHead(num_classes, self.in_channels, self.embedding_dim)
 
-    def forward(self, inputs,height, mask, ufzs):
+    def forward(self, inputs,height, mask, ufzs,geo_instance):
         H, W = inputs.size(2), inputs.size(3)
         
         x = self.backbone.forward(inputs)

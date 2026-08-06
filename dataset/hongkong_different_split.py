@@ -78,9 +78,9 @@ class Hongkong_dataset(torch.utils.data.Dataset):
     def __init__(self, mode,cache=False, augmentation=True):
         super(Hongkong_dataset, self).__init__()
         if mode=='test':
-            MAIN_FOLDER = '../dataset/hk_building_age/no_same_building/val/'
+            MAIN_FOLDER = '../dataset/hk_building_age/building place split/val/'
         else:
-            MAIN_FOLDER = '../dataset/hk_building_age/no_same_building/'+mode+'/'
+            MAIN_FOLDER = '../dataset/hk_building_age/building place split/'+mode+'/'
 
         ALL_LABELED_FOLDER = '/mnt/d/Jialu/dataset/hk_building_age/all_labeled_dataset/'
         self.IMAGE_FOLDER = ALL_LABELED_FOLDER + 'image/'

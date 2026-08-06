@@ -254,7 +254,7 @@ class A2FPN(nn.Module):
         self.final_conv = nn.Conv2d(segmentation_channels * 4, num_classes, kernel_size=1, padding=0)
         self.dropout = nn.Dropout2d(p=dropout, inplace=True)
 
-    def forward(self, x, depth, masks,ufzs):
+    def forward(self, x, depth, masks,ufzs,gt_instance):
         # ==> get encoder features
         c1 = self.layer_down0(x)
         c2 = self.layer_down1(c1)

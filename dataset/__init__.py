@@ -10,7 +10,7 @@ def get_dataloader(name,mode):
     elif name=='global_hongkong':
         from .global_hongkong import Hongkong_dataset
         return Hongkong_dataset(mode)
-    elif name=='instance_hongkong':
+    elif name=='place_hongkong':
             from .hongkong_different_split import Hongkong_dataset
             return Hongkong_dataset(mode)
     else:

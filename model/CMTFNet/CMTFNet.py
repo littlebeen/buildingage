@@ -360,7 +360,7 @@ class CMTFNet(nn.Module):
         self.backbone = backbone()
         self.decoder = Decoder(encode_channels, decode_channels, dropout=dropout, num_classes=num_classes)
 
-    def forward(self, x, height, mask, ufzs):
+    def forward(self, x, height, mask, ufzs, gt_instance):
         h, w = x.size()[-2:]
         res1, res2, res3, res4 = self.backbone(x)
         x = self.decoder(res1, res2, res3, res4, h, w)
